@@ -5,7 +5,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Add source files
-add_executable(main src/main.cpp src/module1/foo.cpp)
+add_executable(main src/main.cpp src/calculator.cpp src/module1/foo.cpp)
 
 # Include directories
 target_include_directories(main PRIVATE include)
