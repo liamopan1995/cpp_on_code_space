@@ -239,39 +239,67 @@ cmake --build /workspaces/cpp_on_code_space/build
 - `tests/CMakeLists.txt`
 - `CMakeLists.txt`
 
-## 12. 延伸：在每个步骤中你还可以做什么
+## 12. 归档 Change
 
-### 12.1 Proposal 阶段
+### 12.1 归档命令
+命令：
+```bash
+openspec archive create-basic-calculator
+```
+
+原因：
+- `openspec archive` 的命令格式是 `openspec archive [change-name]`，不支持 `--change` 选项。
+- 直接给出 change 名称，OpenSpec 会把已完成 change 移到归档目录。
+
+### 12.2 常用选项
+- `-y` / `--yes`：跳过确认提示
+- `--skip-specs`：跳过 main specs 的更新
+- `--no-validate`：跳过验证（不推荐）
+
+### 12.3 归档的作用和影响
+- 把 `openspec/changes/create-basic-calculator/` 移动到 `openspec/changes/archive/YYYY-MM-DD-create-basic-calculator/`
+- 该 change 不再作为活动 change 跟踪
+- 保留变更历史和 `.openspec.yaml`
+- 不会直接修改代码逻辑，只是工作流状态整理
+
+### 12.4 归档前检查
+- `openspec status --change "create-basic-calculator" --json`，确认 artifacts 已完成
+- `openspec/changes/create-basic-calculator/tasks.md` 中任务已全部打勾
+- 如果有 delta specs，先决定是否同步到主 spec
+
+## 13. 延伸：在每个步骤中你还可以做什么
+
+### 13.1 Proposal 阶段
 - 修正需求范围：如果你发现目标不够清晰，可以重新定义 `Why` 和 `What Changes`，让后续设计更准确。
 - 补充 Capability：如果发现需要更多用例，可以增加 `Capabilities`，并明确对应 `specs/<name>/spec.md`。
 - 明确影响范围：把受影响文件、API、测试、依赖写清楚，避免实现时漏改。
 
-### 12.2 Design 阶段
+### 13.2 Design 阶段
 - 深化技术方案：把每个方案选项写出来，说明为什么选这个而不是另一个。
 - 明确边界条件：列出除零、输入类型、错误处理等潜在问题。
 - 记录开放问题：如果有不确定的实现细节，写进 `Open Questions`，后续再补。
 
-### 12.3 Specs 阶段
+### 13.3 Specs 阶段
 - 补全场景：每条需求至少写一个 `Scenario`，最好覆盖正常路径和异常路径。
 - 细化语义：使用 `SHALL/MUST` 来定义行为，避免 `should/may`。
 - 对齐测试：把场景直接映射成测试用例，方便从 spec 到代码的转换。
 
-### 12.4 Tasks 阶段
+### 13.4 Tasks 阶段
 - 细分任务：如果任务太大，可以把它拆成更小的子任务，降低实现风险。
 - 逐项完成：每做一项就打勾，保证工作进度可跟踪。
 - 添加验证任务：把“运行测试”“检查输出”“修复构建问题”也写进任务列表。
 
-### 12.5 Apply 阶段
+### 13.5 Apply 阶段
 - 读取上下文：仔细阅读 proposal/design/specs/tasks，避免偏离目标。
 - 发现问题及时回写：如果实现过程中发现设计或需求不对，可以回到 `proposal`/`design`/`specs` 修改。
 - 保持最小变更：每次改动都只做当前任务所需内容，降低回滚成本。
 
-### 12.6 编译与测试阶段
+### 13.6 编译与测试阶段
 - 检查构建依赖：确保新增文件被 CMake 或构建系统正确包含。
 - 链接验证：如果出现 `undefined reference`，说明实现文件未链接到目标。
 - 运行测试：单元测试不仅验证正确性，还能覆盖异常情况。
 
-### 12.7 迭代改进
+### 13.7 迭代改进
 - 复盘流程：每完成一个 change 后，总结哪些步骤效率高、哪些步骤出错多。
 - 规范文档：把常见问题和解决办法写入 `how_to_openspec/README.md`，积累团队经验。
 - 扩展 schema：如果当前 change 需要更复杂流程，可以考虑定制 OpenSpec schema 或 artifact 结构。
