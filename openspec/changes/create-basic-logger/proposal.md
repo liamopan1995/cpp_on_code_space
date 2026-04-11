@@ -1,0 +1,22 @@
+## Why
+当前代码库缺少统一的日志记录能力，调试与运行时异常排查依赖手工打印信息，管理不便。通过引入基础 logger，可让项目日志输出更规范、可控，并为后续性能、格式、过滤和持久化增强提供基础。
+
+## What Changes
+- 添加 `include/myproject/logger.h`，声明基础 logger 接口和配置选项
+- 添加 `src/logger.cpp`，实现 logger 基础功能
+- 修改 `src/main.cpp` 或示例入口，以演示 logger 输出和落盘能力
+- 添加或更新单元测试 `tests/unit/test_logger.cpp`，验证日志级别、控制台输出和文件落盘行为
+- 更新 `CMakeLists.txt` 和 `tests/CMakeLists.txt`，确保 logger 实现与测试正确构建
+
+## Capabilities
+- 提供基础日志记录能力 `basic-logger`
+- 支持不同日志级别：`info`、`warning`、`error`
+- 支持运行时实时落盘，将日志输出到指定文件
+- 支持控制台输出，包含时间戳和日志级别信息
+- 支持可配置日志前缀或模块名
+
+## Impact
+- 影响文件：`include/myproject/logger.h`、`src/logger.cpp`、`src/main.cpp`
+- 影响测试：`tests/unit/test_logger.cpp`
+- 需要修改构建配置：`CMakeLists.txt`、`tests/CMakeLists.txt`
+- 为后续日志写入文件、日志格式扩展、日志级别过滤以及异步写盘提供基础接口和实现

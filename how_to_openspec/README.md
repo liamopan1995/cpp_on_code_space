@@ -80,6 +80,54 @@ openspec instructions proposal --change "create-basic-calculator" --json
 效果：
 - proposal 成为后续 `design`、`specs`、`tasks` 的基础。
 
+模板：
+```
+# Proposal: Create Basic Calculator
+
+## Why
+描述为什么需要 basic-calculator 能力，解决什么问题或改进什么场景。
+
+## What Changes
+- 添加 `include/myproject/calculator.h`
+- 添加 `src/calculator.cpp`
+- 修改 `src/main.cpp` 以演示 calculator 功能
+- 添加或更新单元测试 `tests/unit/test_calculator.cpp`
+
+## Capabilities
+- 引入 `basic-calculator` 能力
+- 提供基本算术运算：加、减、乘、除
+
+## Impact
+- 影响文件：`include/myproject/calculator.h`、`src/calculator.cpp`、`src/main.cpp`
+- 影响测试：`tests/unit/test_calculator.cpp`
+- 需要更新 `CMakeLists.txt` 以包含 calculator 实现和测试目标
+```
+或者：
+## Why
+
+This change adds a basic calculator functionality to the C++ project, allowing users to perform simple arithmetic operations like addition, subtraction, multiplication, and division. This enhances the project with a practical example of modular code organization and basic math operations.
+
+## What Changes
+
+- Add a new Calculator class in the src/ directory
+- Implement basic arithmetic operations: add, subtract, multiply, divide
+- Update main.cpp to demonstrate the calculator usage
+- Add unit tests for the calculator functions
+
+## Capabilities
+
+### New Capabilities
+- `basic-calculator`: Provides a simple calculator with arithmetic operations
+
+### Modified Capabilities
+<!-- No existing capabilities are being modified -->
+
+## Impact
+
+- New source files: src/calculator.cpp, include/myproject/calculator.h
+- Modified: src/main.cpp to include calculator demo
+- New tests in tests/unit/
+
 ## 5. 生成 Design
 
 ### 5.1 获取 Design 指令
