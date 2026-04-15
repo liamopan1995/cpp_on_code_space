@@ -10,7 +10,7 @@ Logger& Logger::getInstance() {
 
 Logger::Logger() 
     : minLevel_(LogLevel::INFO)
-    , useColors_(false)
+    , useColors_(true)
     , initialized_(false) {
 }
 
