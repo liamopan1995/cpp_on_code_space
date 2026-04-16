@@ -38,7 +38,7 @@ public:
      * @brief Initialize the logger with a minimum log level
      * @param level Minimum log level to output (messages below this level are ignored)
      */
-    void init(LogLevel level = LogLevel::INFO);
+    void init(LogLevel level = LogLevel::WARN);
 
     /**
      * @brief Enable or disable file logging

@@ -1,4 +1,5 @@
 #include "myproject/logger.h"
+#include <cstdlib>  // 添加 for getenv()
 
 namespace myproject {
 
@@ -25,11 +26,109 @@ void Logger::init(LogLevel level) {
     minLevel_ = level;
     initialized_ = true;
     
-    // 直接输出，不调用logInternal避免死锁
-    std::string message = "Logger initialized with level: " + levelToString(level);
+    // 检查环境变量
+    const char* logOutputEnv = std::getenv("LOG_OUTPUT");
+    const char* logFileEnv = std::getenv("LOG_FILE");
+    const char* logLevelEnv = std::getenv("LOG_LEVEL");
+    
+    bool enableFileLogging = true;  // 默认启用文件日志
+    
+    if (logOutputEnv != nullptr) {
+        std::string output(logOutputEnv);
+        if (output == "console" || output == "CONSOLE") {
+            enableFileLogging = false;
+        } else if (output == "file" || output == "FILE") {
+            enableFileLogging = true;
+        } else if (output == "both" || output == "BOTH") {
+            enableFileLogging = true;  // 文件日志已启用，控制台日志总是启用
+        }
+        // 其他值保持默认（文件日志）
+    }
+    
+    std::string filename;
+    if (logFileEnv != nullptr && logFileEnv[0] != '\0') {
+        filename = logFileEnv;
+    }
+    
+    // 根据 LOG_OUTPUT 决定是否启用文件日志
+    if (enableFileLogging) {
+        if (filename.empty()) {
+            // 默认文件名带时间戳
+            auto now = std::chrono::system_clock::now();
+            auto time_t_now = std::chrono::system_clock::to_time_t(now);
+            std::tm tm_now = *std::localtime(&time_t_now);
+            
+            std::ostringstream oss;
+            oss << "log_" 
+                << (tm_now.tm_year + 1900) << "-"
+                << std::setfill('0') << std::setw(2) << (tm_now.tm_mon + 1) << "-"
+                << std::setfill('0') << std::setw(2) << tm_now.tm_mday << "_"
+                << std::setfill('0') << std::setw(2) << tm_now.tm_hour << "-"
+                << std::setfill('0') << std::setw(2) << tm_now.tm_min << "-"
+                << std::setfill('0') << std::setw(2) << tm_now.tm_sec
+                << ".txt";
+            
+            filename = oss.str();
+        }
+        
+        fileStream_ = std::make_unique<std::ofstream>(filename);
+        if (!fileStream_->is_open()) {
+            // 直接输出错误
+            std::string message = "Failed to open log file: " + filename;
+            std::string timestamp = getTimestamp();
+            std::string formattedMessage = "[" + timestamp + "] [ERROR] " + message;
+            std::cout << formattedMessage << std::endl;
+            fileStream_.reset();
+        }
+    }
+    
+    // 检查 LOG_LEVEL 环境变量
+    if (logLevelEnv != nullptr) {
+        std::string levelStr(logLevelEnv);
+        if (levelStr == "DEBUG" || levelStr == "debug") {
+            minLevel_ = LogLevel::DEBUG;
+        } else if (levelStr == "INFO" || levelStr == "info") {
+            minLevel_ = LogLevel::INFO;
+        } else if (levelStr == "WARN" || levelStr == "warn" || levelStr == "WARNING" || levelStr == "warning") {
+            minLevel_ = LogLevel::WARN;
+        } else if (levelStr == "ERROR" || levelStr == "error") {
+            minLevel_ = LogLevel::ERROR;
+        }
+    }
+    
+    // 直接输出初始化信息，不调用logInternal避免死锁
+    std::string message = "Logger initialized with level: " + levelToString(minLevel_);
     std::string timestamp = getTimestamp();
     std::string formattedMessage = "[" + timestamp + "] [INFO] " + message;
     std::cout << formattedMessage << std::endl;
+    
+    // 输出环境变量配置信息
+    if (logOutputEnv != nullptr) {
+        std::string outputMsg = "LOG_OUTPUT=" + std::string(logOutputEnv);
+        std::string outputFormatted = "[" + timestamp + "] [INFO] " + outputMsg;
+        std::cout << outputFormatted << std::endl;
+    }
+    
+    if (logFileEnv != nullptr && fileStream_ && fileStream_->is_open()) {
+        std::string fileMsg = "LOG_FILE=" + std::string(logFileEnv);
+        std::string fileFormatted = "[" + timestamp + "] [INFO] " + fileMsg;
+        std::cout << fileFormatted << std::endl;
+    }
+    
+    // 如果启用了文件日志，也将初始化信息写入文件
+    if (fileStream_ && fileStream_->is_open()) {
+        *fileStream_ << formattedMessage << std::endl;
+        if (logOutputEnv != nullptr) {
+            std::string outputMsg = "LOG_OUTPUT=" + std::string(logOutputEnv);
+            std::string outputFormatted = "[" + timestamp + "] [INFO] " + outputMsg;
+            *fileStream_ << outputFormatted << std::endl;
+        }
+        if (logFileEnv != nullptr) {
+            std::string fileMsg = "LOG_FILE=" + std::string(logFileEnv);
+            std::string fileFormatted = "[" + timestamp + "] [INFO] " + fileMsg;
+            *fileStream_ << fileFormatted << std::endl;
+        }
+    }
 }
 
 void Logger::enableFileLogging(const std::string& filename) {
