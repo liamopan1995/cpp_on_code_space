@@ -24,6 +24,13 @@ protected:
         // 清理可能存在的测试文件
         std::remove("test_logger_output.log");
         std::remove("test_console_only.log");
+        std::remove("test_env_file.log");
+        std::remove("test_output_file.log");
+        std::remove("demo_log.txt");
+        
+        // 重置 logger 状态
+        // 由于 logger 是单例且没有重置方法，我们通过重新初始化来重置
+        // 但 initialized_ 是私有的，所以我们只能依赖每个测试自己设置正确的状态
     }
     
     void TearDown() override {
@@ -49,6 +56,9 @@ protected:
         // 清理测试文件
         std::remove("test_logger_output.log");
         std::remove("test_console_only.log");
+        std::remove("test_env_file.log");
+        std::remove("test_output_file.log");
+        std::remove("demo_log.txt");
     }
     
     std::string readFile(const std::string& filename) {
@@ -59,6 +69,26 @@ protected:
         return buffer.str();
     }
     
+    // 辅助函数：从日志行提取文件名
+    std::string extractFilename(const std::string& logLine) {
+        // 查找第三个方括号对（文件:行信息）
+        size_t pos = 0;
+        for (int i = 0; i < 2; ++i) {
+            pos = logLine.find("]", pos);
+            if (pos == std::string::npos) return "";
+            pos++;
+        }
+        
+        // 现在pos指向第三个方括号的开始
+        size_t start = logLine.find("[", pos);
+        if (start == std::string::npos) return "";
+        
+        size_t end = logLine.find("]", start);
+        if (end == std::string::npos) return "";
+        
+        return logLine.substr(start + 1, end - start - 1);
+    }
+    
 private:
     std::string originalLogFile_;
     std::string originalLogLevel_;
@@ -67,18 +97,19 @@ private:
 
 // 测试 3.1: LOG_LEVEL 默认为 WARNING 并过滤低级别消息
 TEST_F(LoggerTest, LogLevelDefaultsToWarning) {
-    auto& logger = myproject::Logger::getInstance();
-    logger.init();
-    
-    // 重定向 cout 到 stringstream 以捕获输出
+    // 在初始化logger之前重定向输出
     std::stringstream buffer;
     std::streambuf* old = std::cout.rdbuf(buffer.rdbuf());
     
-    // 测试不同级别的日志
-    logger.debug("Debug message should not appear");
-    logger.info("Info message should not appear");
-    logger.warn("Warning message should appear");
-    logger.error("Error message should appear");
+    auto& logger = myproject::Logger::getInstance();
+
+    logger.init();  // 默认级别是 WARN
+    
+    // 测试不同级别的日志（使用宏自动捕获文件行号）
+    LOG_DEBUG("Debug message should not appear");
+    LOG_INFO("Info message should not appear");
+    LOG_WARN("Warning message should appear");
+    LOG_ERROR("Error message should appear");
     
     std::cout.rdbuf(old); // 恢复 cout
     
@@ -97,26 +128,33 @@ TEST_F(LoggerTest, LogLevelDefaultsToWarning) {
 TEST_F(LoggerTest, LogOutputControl) {
     // 测试 1: 默认情况下应该输出到控制台
     {
-        auto& logger = myproject::Logger::getInstance();
-        logger.init();
-        
         std::stringstream buffer;
         std::streambuf* old = std::cout.rdbuf(buffer.rdbuf());
         
-        logger.info("Console output test");
+        auto& logger = myproject::Logger::getInstance();
+
+        // 重要：设置日志级别为 INFO，这样 INFO 消息不会被过滤
+        logger.init(myproject::LogLevel::INFO);
+        
+        LOG_INFO("Console output test");
         
         std::cout.rdbuf(old);
         
-        EXPECT_EQ(buffer.str().find("Console output test"), std::string::npos);// info 级别的日志不应该被输出，因为默认级别是 WARN
+
+        std::string captured = buffer.str();
+        bool found = captured.find("Console output test") != std::string::npos;
+        EXPECT_TRUE(found) << "没有找到 'Console output test'，捕获的输出是:\n" << captured;
     }
     
     // 测试 2: 启用文件日志后应该同时输出到文件
     {
         auto& logger = myproject::Logger::getInstance();
-        logger.init();
+
+        // 重要：设置日志级别为 INFO
+        logger.init(myproject::LogLevel::INFO);
         logger.enableFileLogging("test_logger_output.log");
         
-        logger.warn("File logging test");
+        LOG_INFO("File logging test");
         logger.disableFileLogging();
         
         // 检查文件内容
@@ -124,21 +162,24 @@ TEST_F(LoggerTest, LogOutputControl) {
         EXPECT_NE(fileContent.find("File logging test"), std::string::npos);
     }
 }
+
+
 // 测试环境变量 LOG_LEVEL
 TEST_F(LoggerTest, EnvironmentVariableLogLevel) {
     // 设置环境变量
     setenv("LOG_LEVEL", "ERROR", 1);
     
-    auto& logger = myproject::Logger::getInstance();
-    logger.init();
-    
     std::stringstream buffer;
     std::streambuf* old = std::cout.rdbuf(buffer.rdbuf());
     
-    logger.debug("Debug - should not appear");
-    logger.info("Info - should not appear");
-    logger.warn("Warning - should not appear");
-    logger.error("Error - should appear");
+    auto& logger = myproject::Logger::getInstance();
+
+    logger.init();  // 会读取环境变量，设置级别为 ERROR
+    
+    LOG_DEBUG("Debug - should not appear");
+    LOG_INFO("Info - should not appear");
+    LOG_WARN("Warning - should not appear");
+    LOG_ERROR("Error - should appear");
     
     std::cout.rdbuf(old);
     
@@ -157,9 +198,11 @@ TEST_F(LoggerTest, EnvironmentVariableLogFile) {
     setenv("LOG_FILE", "test_env_file.log", 1);
     
     auto& logger = myproject::Logger::getInstance();
-    logger.init();
+
+    // 重要：设置日志级别为 INFO
+    logger.init(myproject::LogLevel::INFO);
     
-    logger.warn("Message via environment variable");
+    LOG_INFO("Message via environment variable");
     
     // 检查文件是否被创建并包含消息
     std::string fileContent = readFile("test_env_file.log");
@@ -169,7 +212,51 @@ TEST_F(LoggerTest, EnvironmentVariableLogFile) {
     std::remove("test_env_file.log");
 }
 
-int main(int argc, char **argv) {
-    ::testing::InitGoogleTest(&argc, argv);
-    return RUN_ALL_TESTS();
+// 测试环境变量 LOG_OUTPUT
+TEST_F(LoggerTest, EnvironmentVariableLogOutput) {
+    // 测试 console 模式
+    {
+        setenv("LOG_OUTPUT", "console", 1);
+        
+        std::stringstream buffer;
+        std::streambuf* old = std::cout.rdbuf(buffer.rdbuf());
+        
+        auto& logger = myproject::Logger::getInstance();
+
+        // 重要：设置日志级别为 INFO
+        logger.init(myproject::LogLevel::INFO);
+        
+        LOG_INFO("Console only test");
+        
+        std::cout.rdbuf(old);
+        
+
+        std::string captured = buffer.str();
+        bool found = captured.find("Console only test") != std::string::npos;
+        EXPECT_TRUE(found) << "没有找到 'Console only test'，捕获的输出是:\n" << captured;
+        
+        unsetenv("LOG_OUTPUT");
+    }
+    
+    // 测试 file 模式
+    {
+        setenv("LOG_OUTPUT", "file", 1);
+        setenv("LOG_FILE", "test_output_file.log", 1);
+        
+        auto& logger = myproject::Logger::getInstance();
+
+        // 重要：设置日志级别为 INFO
+        logger.init(myproject::LogLevel::INFO);
+        
+        LOG_INFO("File only test");
+        
+        // 检查文件内容
+        std::string fileContent = readFile("test_output_file.log");
+        EXPECT_NE(fileContent.find("File only test"), std::string::npos);
+        
+        // 清理
+        std::remove("test_output_file.log");
+        unsetenv("LOG_OUTPUT");
+        unsetenv("LOG_FILE");
+    }
 }

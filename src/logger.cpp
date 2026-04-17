@@ -1,5 +1,6 @@
 #include "myproject/logger.h"
 #include <cstdlib>  // 添加 for getenv()
+#include <algorithm> // 添加 for std::find
 
 namespace myproject {
 
@@ -10,7 +11,7 @@ Logger& Logger::getInstance() {
 }
 
 Logger::Logger() 
-    : minLevel_(LogLevel::INFO)
+    : minLevel_(LogLevel::WARN)  // 默认级别为 WARN，符合任务需求
     , useColors_(true)
     , initialized_(false) {
 }
@@ -73,12 +74,9 @@ void Logger::init(LogLevel level) {
         
         fileStream_ = std::make_unique<std::ofstream>(filename);
         if (!fileStream_->is_open()) {
-            // 直接输出错误
-            std::string message = "Failed to open log file: " + filename;
-            std::string timestamp = getTimestamp();
-            std::string formattedMessage = "[" + timestamp + "] [ERROR] " + message;
-            std::cout << formattedMessage << std::endl;
+            // 文件打开失败，重置文件流
             fileStream_.reset();
+            // 注意：我们仍然输出到控制台，所以不在这里输出错误
         }
     }
     
@@ -94,6 +92,9 @@ void Logger::init(LogLevel level) {
         } else if (levelStr == "ERROR" || levelStr == "error") {
             minLevel_ = LogLevel::ERROR;
         }
+    } else {
+        // 如果没有设置 LOG_LEVEL 环境变量，使用传入的 level 参数
+        minLevel_ = level;
     }
     
     // 直接输出初始化信息，不调用logInternal避免死锁
@@ -101,18 +102,21 @@ void Logger::init(LogLevel level) {
     std::string timestamp = getTimestamp();
     std::string formattedMessage = "[" + timestamp + "] [INFO] " + message;
     std::cout << formattedMessage << std::endl;
+    std::cout.flush();  // 确保输出立即刷新
     
     // 输出环境变量配置信息
     if (logOutputEnv != nullptr) {
         std::string outputMsg = "LOG_OUTPUT=" + std::string(logOutputEnv);
         std::string outputFormatted = "[" + timestamp + "] [INFO] " + outputMsg;
         std::cout << outputFormatted << std::endl;
+        std::cout.flush();
     }
     
     if (logFileEnv != nullptr && fileStream_ && fileStream_->is_open()) {
         std::string fileMsg = "LOG_FILE=" + std::string(logFileEnv);
         std::string fileFormatted = "[" + timestamp + "] [INFO] " + fileMsg;
         std::cout << fileFormatted << std::endl;
+        std::cout.flush();
     }
     
     // 如果启用了文件日志，也将初始化信息写入文件
@@ -128,6 +132,7 @@ void Logger::init(LogLevel level) {
             std::string fileFormatted = "[" + timestamp + "] [INFO] " + fileMsg;
             *fileStream_ << fileFormatted << std::endl;
         }
+        fileStream_->flush();
     }
 }
 
@@ -162,10 +167,12 @@ void Logger::enableFileLogging(const std::string& filename) {
         std::string timestamp = getTimestamp();
         std::string formattedMessage = "[" + timestamp + "] [INFO] " + message;
         std::cout << formattedMessage << std::endl;
+        std::cout.flush();
         
         // 如果需要也写入文件
         if (fileStream_) {
             *fileStream_ << formattedMessage << std::endl;
+            fileStream_->flush();
         }
     } else {
         // 直接输出错误
@@ -173,6 +180,7 @@ void Logger::enableFileLogging(const std::string& filename) {
         std::string timestamp = getTimestamp();
         std::string formattedMessage = "[" + timestamp + "] [ERROR] " + message;
         std::cout << formattedMessage << std::endl;
+        std::cout.flush();
         fileStream_.reset();
     }
 }
@@ -188,6 +196,7 @@ void Logger::disableFileLogging() {
         std::string timestamp = getTimestamp();
         std::string formattedMessage = "[" + timestamp + "] [INFO] " + message;
         std::cout << formattedMessage << std::endl;
+        std::cout.flush();
     }
 }
 
@@ -200,51 +209,71 @@ void Logger::setLogLevel(LogLevel level) {
     std::string timestamp = getTimestamp();
     std::string formattedMessage = "[" + timestamp + "] [INFO] " + message;
     std::cout << formattedMessage << std::endl;
+    std::cout.flush();
 }
 
-void Logger::debug(const std::string& message) {
-    log(LogLevel::DEBUG, message);
+void Logger::debug(const std::string& message, const std::string& file, int line, const std::string& module) {
+    log(LogLevel::DEBUG, message, file, line, module);
 }
 
-void Logger::info(const std::string& message) {
-    log(LogLevel::INFO, message);
+void Logger::info(const std::string& message, const std::string& file, int line, const std::string& module) {
+    log(LogLevel::INFO, message, file, line, module);
 }
 
-void Logger::warn(const std::string& message) {
-    log(LogLevel::WARN, message);
+void Logger::warn(const std::string& message, const std::string& file, int line, const std::string& module) {
+    log(LogLevel::WARN, message, file, line, module);
 }
 
-void Logger::error(const std::string& message) {
-    log(LogLevel::ERROR, message);
+void Logger::error(const std::string& message, const std::string& file, int line, const std::string& module) {
+    log(LogLevel::ERROR, message, file, line, module);
 }
 
-void Logger::log(LogLevel level, const std::string& message) {
+void Logger::log(LogLevel level, const std::string& message, const std::string& file, int line, const std::string& module) {
     if (!initialized_) {
         init();
     }
     
     if (level >= minLevel_) {
-        logInternal(level, message);
+        logInternal(level, message, file, line, module);
     }
 }
 
-void Logger::logInternal(LogLevel level, const std::string& message) {
+void Logger::logInternal(LogLevel level, const std::string& message, const std::string& file, int line, const std::string& module) {
     std::lock_guard<std::mutex> lock(logMutex_);
     
     std::string timestamp = getTimestamp();
     std::string levelStr = levelToString(level);
-    std::string formattedMessage = "[" + timestamp + "] [" + levelStr + "] " + message;
+    
+    // 构建格式化的消息
+    std::ostringstream formattedMessage;
+    formattedMessage << "[" << timestamp << "] [" << levelStr << "]";
+    
+    // 添加文件:行信息（如果提供了）
+    if (!file.empty() && line > 0) {
+        std::string filename = extractFilename(file);
+        formattedMessage << " [" << filename << ":" << line << "]";
+    }
+    
+    // 添加模块名（如果提供了）
+    if (!module.empty()) {
+        formattedMessage << " [" << module << "]";
+    }
+    
+    formattedMessage << " " << message;
+    
+    std::string finalMessage = formattedMessage.str();
     
     // 输出到控制台
     if (useColors_) {
-        std::cout << getLevelColor(level) << formattedMessage << getResetColor() << std::endl;
+        std::cout << getLevelColor(level) << finalMessage << getResetColor() << std::endl;
     } else {
-        std::cout << formattedMessage << std::endl;
+        std::cout << finalMessage << std::endl;
     }
+    std::cout.flush();  // 确保输出立即刷新
     
     // 输出到文件（无颜色）
     if (fileStream_ && fileStream_->is_open()) {
-        *fileStream_ << formattedMessage << std::endl;
+        *fileStream_ << finalMessage << std::endl;
         fileStream_->flush();
     }
 }
@@ -289,6 +318,21 @@ std::string Logger::getLevelColor(LogLevel level) const {
 
 std::string Logger::getResetColor() const {
     return useColors_ ? "\033[0m" : "";
+}
+
+std::string Logger::extractFilename(const std::string& path) const {
+    // 查找最后一个目录分隔符
+#ifdef _WIN32
+    size_t pos = path.find_last_of("\\/");
+#else
+    size_t pos = path.find_last_of('/');
+#endif
+    
+    if (pos == std::string::npos) {
+        return path;  // 没有目录分隔符，直接返回原路径
+    }
+    
+    return path.substr(pos + 1);
 }
 
 } // namespace myproject
