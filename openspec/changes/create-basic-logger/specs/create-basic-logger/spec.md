@@ -5,11 +5,15 @@
 
 ## Requirements
 ### Requirement: Logger shall support multiple log levels
-Logger SHALL support logging messages at `info`, `warning`, and `error` levels.
+Logger SHALL support logging messages at `debug`, `info`, `warning`, and `error` levels.
 
 #### Scenario: Logging an info message
 - **WHEN** `Logger::info("module", "message")` is called
 - **THEN** the logger writes a log entry containing `[INFO]` and the message.
+
+#### Scenario: Logging a debug message
+- **WHEN** `Logger::debug("module", "message")` is called
+- **THEN** the logger writes a log entry containing `[DEBUG]` and the message when the configured minimum level allows it.
 
 ### Requirement: Logger configuration shall use environment variables
 The logger SHALL determine its behavior from environment variables.
@@ -54,6 +58,20 @@ The logger SHALL prefix each entry with a timestamp and log level, and SHALL inc
 - **WHEN** `Logger::info("network", "started")` is called
 - **THEN** the log entry contains a timestamp, `[INFO]`, `[network]`, and the message.
 
+### Requirement: Logger shall include process and thread context
+The logger SHALL include process ID and thread number in every emitted log entry.
+
+#### Scenario: Process and thread context included
+- **WHEN** `Logger::info("worker", "started")` is called from a worker thread
+- **THEN** the log entry contains the current process ID
+- **AND** the log entry contains the current thread number
+- **AND** the log entry still contains the timestamp, level, and message.
+
+#### Scenario: Thread number formatting
+- **WHEN** `Logger::info("worker", "started")` is called from any thread
+- **THEN** the logger emits the thread number in a stable and parseable format
+- **AND** the log entry format remains parseable and consistent.
+
 ### Requirement: Logger shall filter lower-level messages
 The logger SHALL ignore messages below the configured minimum log level.
 
@@ -69,3 +87,16 @@ The logger SHALL provide explicit initialization and shutdown functions to manag
 - **WHEN** the logger is initialized with a file path
 - **AND** `Logger::shutdown()` is called
 - **THEN** the log file is closed and further messages are not written.
+
+### Requirement: Logger shall serialize concurrent writes
+The logger SHALL preserve each emitted log entry as a complete line when multiple threads log within a close time window.
+
+#### Scenario: Concurrent logging from multiple threads
+- **WHEN** multiple threads emit log messages concurrently
+- **THEN** each log entry is written as one complete line without being interleaved with another entry
+- **AND** no partial line fragments from separate threads appear in the console output or log file.
+
+#### Scenario: Ordering under concurrency
+- **WHEN** multiple threads emit messages at nearly the same time
+- **THEN** the logger preserves the order in which entries are serialized by the logger
+- **AND** the specification does not require the output order to reflect cross-thread causal order.

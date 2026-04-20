@@ -38,3 +38,13 @@
 - [x] 5.5 Add tests for invalid environment variable fallbacks.
 - [x] 5.6 Add tests for `shutdown()` and repeated initialization behavior.
 - [x] 5.7 Add tests for runtime file-path configuration and file creation failure handling.
+
+## 6. Next Revision: Concurrency And Runtime Context
+
+- [ ] 6.1 Extend the logger format to include process ID in every emitted entry.
+- [ ] 6.2 Add thread context output to every emitted entry using a stable thread number format.
+- [ ] 6.3 Define and implement the source and formatting rule for thread numbers.
+- [ ] 6.4 Tighten the logger initialization path so concurrent first-use logging does not race through redundant initialization.
+- [ ] 6.5 Add multithreaded tests that verify entries are emitted as complete, non-interleaved lines under concurrent logging.
+- [ ] 6.6 Add tests that verify process ID and thread number appear in both console and file output.
+- [ ] 6.7 Add tests or documentation that clarify concurrent output ordering is serialization order, not cross-thread causal order.
