@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Add source files for main executable (now includes logger.cpp)
 add_executable(main src/main.cpp src/calculator.cpp src/logger.cpp)
-add_executable(logger_demo src/logger_demo.cpp src/logger_demo.cpp src/logger.cpp)
+add_executable(logger_demo src/logger_demo.cpp src/logger.cpp)
 
 
 # Include directories

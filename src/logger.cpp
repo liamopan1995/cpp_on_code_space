@@ -1,215 +1,149 @@
 #include "myproject/logger.h"
-#include <cstdlib>  // 添加 for getenv()
-#include <algorithm> // 添加 for std::find
+
+#include <algorithm>
+#include <chrono>
+#include <cstdlib>
+#include <ctime>
+#include <iomanip>
+#include <optional>
+#include <sstream>
 
 namespace myproject {
+namespace {
 
-// Static member initialization
+std::string normalizeToken(const char* value) {
+    if (value == nullptr) {
+        return "";
+    }
+
+    std::string token(value);
+    std::transform(token.begin(), token.end(), token.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+    });
+    return token;
+}
+
+std::optional<LogLevel> parseLogLevelToken(const char* value) {
+    const std::string token = normalizeToken(value);
+    if (token == "debug") {
+        return LogLevel::DEBUG;
+    }
+    if (token == "info") {
+        return LogLevel::INFO;
+    }
+    if (token == "warn" || token == "warning") {
+        return LogLevel::WARN;
+    }
+    if (token == "error") {
+        return LogLevel::ERROR;
+    }
+    return std::nullopt;
+}
+
+}  // namespace
+
 Logger& Logger::getInstance() {
     static Logger instance;
     return instance;
 }
 
-Logger::Logger() 
-    : minLevel_(LogLevel::WARN)  // 默认级别为 WARN，符合任务需求
-    , useColors_(true)
-    , initialized_(false) {
+Logger::Logger()
+    : minLevel_(LogLevel::WARN),
+      initialized_(false),
+      shutdown_(false),
+      consoleEnabled_(false),
+      fileEnabled_(false) {
 }
 
 Logger::~Logger() {
-    if (fileStream_ && fileStream_->is_open()) {
-        fileStream_->close();
-    }
+    shutdown();
+}
+
+void Logger::init() {
+    initWithDefaults(std::nullopt);
 }
 
 void Logger::init(LogLevel level) {
+    initWithDefaults(level);
+}
+
+void Logger::initWithDefaults(std::optional<LogLevel> defaultLevel) {
     std::lock_guard<std::mutex> lock(logMutex_);
-    minLevel_ = level;
+
+    resetOutputsLocked();
+    shutdown_ = false;
     initialized_ = true;
-    
-    // 检查环境变量
-    const char* logOutputEnv = std::getenv("LOG_OUTPUT");
-    const char* logFileEnv = std::getenv("LOG_FILE");
-    const char* logLevelEnv = std::getenv("LOG_LEVEL");
-    
-    bool enableFileLogging = true;  // 默认启用文件日志
-    
-    if (logOutputEnv != nullptr) {
-        std::string output(logOutputEnv);
-        if (output == "console" || output == "CONSOLE") {
-            enableFileLogging = false;
-        } else if (output == "file" || output == "FILE") {
-            enableFileLogging = true;
-        } else if (output == "both" || output == "BOTH") {
-            enableFileLogging = true;  // 文件日志已启用，控制台日志总是启用
-        }
-        // 其他值保持默认（文件日志）
+
+    minLevel_ = defaultLevel.value_or(LogLevel::WARN);
+
+    const char* levelEnv = std::getenv("LOG_LEVEL");
+    const std::optional<LogLevel> envLevel = parseLogLevelToken(levelEnv);
+    if (envLevel.has_value()) {
+        minLevel_ = *envLevel;
+    } else if (levelEnv != nullptr && levelEnv[0] != '\0') {
+        minLevel_ = LogLevel::WARN;
     }
-    
-    std::string filename;
-    if (logFileEnv != nullptr && logFileEnv[0] != '\0') {
-        filename = logFileEnv;
-    }
-    
-    // 根据 LOG_OUTPUT 决定是否启用文件日志
-    if (enableFileLogging) {
-        if (filename.empty()) {
-            // 默认文件名带时间戳
-            auto now = std::chrono::system_clock::now();
-            auto time_t_now = std::chrono::system_clock::to_time_t(now);
-            std::tm tm_now = *std::localtime(&time_t_now);
-            
-            std::ostringstream oss;
-            oss << "log_" 
-                << (tm_now.tm_year + 1900) << "-"
-                << std::setfill('0') << std::setw(2) << (tm_now.tm_mon + 1) << "-"
-                << std::setfill('0') << std::setw(2) << tm_now.tm_mday << "_"
-                << std::setfill('0') << std::setw(2) << tm_now.tm_hour << "-"
-                << std::setfill('0') << std::setw(2) << tm_now.tm_min << "-"
-                << std::setfill('0') << std::setw(2) << tm_now.tm_sec
-                << ".txt";
-            
-            filename = oss.str();
-        }
-        
-        fileStream_ = std::make_unique<std::ofstream>(filename);
-        if (!fileStream_->is_open()) {
-            // 文件打开失败，重置文件流
-            fileStream_.reset();
-            // 注意：我们仍然输出到控制台，所以不在这里输出错误
-        }
-    }
-    
-    // 检查 LOG_LEVEL 环境变量
-    if (logLevelEnv != nullptr) {
-        std::string levelStr(logLevelEnv);
-        if (levelStr == "DEBUG" || levelStr == "debug") {
-            minLevel_ = LogLevel::DEBUG;
-        } else if (levelStr == "INFO" || levelStr == "info") {
-            minLevel_ = LogLevel::INFO;
-        } else if (levelStr == "WARN" || levelStr == "warn" || levelStr == "WARNING" || levelStr == "warning") {
-            minLevel_ = LogLevel::WARN;
-        } else if (levelStr == "ERROR" || levelStr == "error") {
-            minLevel_ = LogLevel::ERROR;
-        }
+
+    const std::string outputMode = normalizeToken(std::getenv("LOG_OUTPUT"));
+    if (outputMode == "console") {
+        consoleEnabled_ = true;
+        fileEnabled_ = false;
+    } else if (outputMode == "both") {
+        consoleEnabled_ = true;
+        fileEnabled_ = true;
     } else {
-        // 如果没有设置 LOG_LEVEL 环境变量，使用传入的 level 参数
-        minLevel_ = level;
+        consoleEnabled_ = false;
+        fileEnabled_ = true;
     }
-    
-    // 直接输出初始化信息，不调用logInternal避免死锁
-    std::string message = "Logger initialized with level: " + levelToString(minLevel_);
-    std::string timestamp = getTimestamp();
-    std::string formattedMessage = "[" + timestamp + "] [INFO] " + message;
-    std::cout << formattedMessage << std::endl;
-    std::cout.flush();  // 确保输出立即刷新
-    
-    // 输出环境变量配置信息
-    if (logOutputEnv != nullptr) {
-        std::string outputMsg = "LOG_OUTPUT=" + std::string(logOutputEnv);
-        std::string outputFormatted = "[" + timestamp + "] [INFO] " + outputMsg;
-        std::cout << outputFormatted << std::endl;
-        std::cout.flush();
+
+    if (!fileEnabled_) {
+        return;
     }
-    
-    if (logFileEnv != nullptr && fileStream_ && fileStream_->is_open()) {
-        std::string fileMsg = "LOG_FILE=" + std::string(logFileEnv);
-        std::string fileFormatted = "[" + timestamp + "] [INFO] " + fileMsg;
-        std::cout << fileFormatted << std::endl;
-        std::cout.flush();
-    }
-    
-    // 如果启用了文件日志，也将初始化信息写入文件
-    if (fileStream_ && fileStream_->is_open()) {
-        *fileStream_ << formattedMessage << std::endl;
-        if (logOutputEnv != nullptr) {
-            std::string outputMsg = "LOG_OUTPUT=" + std::string(logOutputEnv);
-            std::string outputFormatted = "[" + timestamp + "] [INFO] " + outputMsg;
-            *fileStream_ << outputFormatted << std::endl;
-        }
-        if (logFileEnv != nullptr) {
-            std::string fileMsg = "LOG_FILE=" + std::string(logFileEnv);
-            std::string fileFormatted = "[" + timestamp + "] [INFO] " + fileMsg;
-            *fileStream_ << fileFormatted << std::endl;
-        }
-        fileStream_->flush();
+
+    const char* fileEnv = std::getenv("LOG_FILE");
+    const std::string path = (fileEnv != nullptr && fileEnv[0] != '\0')
+        ? std::string(fileEnv)
+        : makeDefaultLogFilename();
+
+    if (!openLogFileLocked(path)) {
+        fileEnabled_ = false;
+        consoleEnabled_ = true;
     }
 }
 
-void Logger::enableFileLogging(const std::string& filename) {
+void Logger::shutdown() {
     std::lock_guard<std::mutex> lock(logMutex_);
-    
-    if (filename.empty()) {
-        // 默认文件名带时间戳
-        auto now = std::chrono::system_clock::now();
-        auto time_t_now = std::chrono::system_clock::to_time_t(now);
-        std::tm tm_now = *std::localtime(&time_t_now);
-        
-        std::ostringstream oss;
-        oss << "log_" 
-            << (tm_now.tm_year + 1900) << "-"
-            << std::setfill('0') << std::setw(2) << (tm_now.tm_mon + 1) << "-"
-            << std::setfill('0') << std::setw(2) << tm_now.tm_mday << "_"
-            << std::setfill('0') << std::setw(2) << tm_now.tm_hour << "-"
-            << std::setfill('0') << std::setw(2) << tm_now.tm_min << "-"
-            << std::setfill('0') << std::setw(2) << tm_now.tm_sec
-            << ".txt";
-        
-        fileStream_ = std::make_unique<std::ofstream>(oss.str());
-    } else {
-        fileStream_ = std::make_unique<std::ofstream>(filename);
+    resetOutputsLocked();
+    initialized_ = false;
+    shutdown_ = true;
+}
+
+bool Logger::enableFileLogging(const std::string& filename) {
+    std::lock_guard<std::mutex> lock(logMutex_);
+
+    if (shutdown_) {
+        shutdown_ = false;
+        initialized_ = true;
+    } else if (!initialized_) {
+        initialized_ = true;
     }
-    
-    if (fileStream_->is_open()) {
-        // 直接输出，不调用logInternal
-        std::string message = "File logging enabled to: " + 
-                             (filename.empty() ? "auto-generated file" : filename);
-        std::string timestamp = getTimestamp();
-        std::string formattedMessage = "[" + timestamp + "] [INFO] " + message;
-        std::cout << formattedMessage << std::endl;
-        std::cout.flush();
-        
-        // 如果需要也写入文件
-        if (fileStream_) {
-            *fileStream_ << formattedMessage << std::endl;
-            fileStream_->flush();
-        }
-    } else {
-        // 直接输出错误
-        std::string message = "Failed to open log file: " + filename;
-        std::string timestamp = getTimestamp();
-        std::string formattedMessage = "[" + timestamp + "] [ERROR] " + message;
-        std::cout << formattedMessage << std::endl;
-        std::cout.flush();
-        fileStream_.reset();
-    }
+
+    fileEnabled_ = openLogFileLocked(filename.empty() ? makeDefaultLogFilename() : filename);
+    return fileEnabled_;
 }
 
 void Logger::disableFileLogging() {
     std::lock_guard<std::mutex> lock(logMutex_);
+    fileEnabled_ = false;
     if (fileStream_ && fileStream_->is_open()) {
         fileStream_->close();
-        fileStream_.reset();
-        
-        // 直接输出，不调用logInternal
-        std::string message = "File logging disabled";
-        std::string timestamp = getTimestamp();
-        std::string formattedMessage = "[" + timestamp + "] [INFO] " + message;
-        std::cout << formattedMessage << std::endl;
-        std::cout.flush();
     }
+    fileStream_.reset();
 }
 
 void Logger::setLogLevel(LogLevel level) {
     std::lock_guard<std::mutex> lock(logMutex_);
     minLevel_ = level;
-    
-    // 直接输出，不调用logInternal
-    std::string message = "Log level changed to: " + levelToString(level);
-    std::string timestamp = getTimestamp();
-    std::string formattedMessage = "[" + timestamp + "] [INFO] " + message;
-    std::cout << formattedMessage << std::endl;
-    std::cout.flush();
 }
 
 void Logger::debug(const std::string& message, const std::string& file, int line, const std::string& module) {
@@ -229,110 +163,140 @@ void Logger::error(const std::string& message, const std::string& file, int line
 }
 
 void Logger::log(LogLevel level, const std::string& message, const std::string& file, int line, const std::string& module) {
-    if (!initialized_) {
+    bool shouldInit = false;
+    {
+        std::lock_guard<std::mutex> lock(logMutex_);
+        if (shutdown_) {
+            return;
+        }
+        shouldInit = !initialized_;
+    }
+
+    if (shouldInit) {
         init();
     }
-    
-    if (level >= minLevel_) {
-        logInternal(level, message, file, line, module);
+
+    std::lock_guard<std::mutex> lock(logMutex_);
+    if (shutdown_ || !initialized_ || level < minLevel_) {
+        return;
     }
+
+    logInternal(level, message, file, line, module);
 }
 
 void Logger::logInternal(LogLevel level, const std::string& message, const std::string& file, int line, const std::string& module) {
-    std::lock_guard<std::mutex> lock(logMutex_);
-    
-    std::string timestamp = getTimestamp();
-    std::string levelStr = levelToString(level);
-    
-    // 构建格式化的消息
-    std::ostringstream formattedMessage;
-    formattedMessage << "[" << timestamp << "] [" << levelStr << "]";
-    
-    // 添加文件:行信息（如果提供了）
+    std::ostringstream formatted;
+    formatted << "[" << getTimestamp() << "] [" << levelToString(level) << "]";
+
     if (!file.empty() && line > 0) {
-        std::string filename = extractFilename(file);
-        formattedMessage << " [" << filename << ":" << line << "]";
+        formatted << " [" << extractFilename(file) << ":" << line << "]";
     }
-    
-    // 添加模块名（如果提供了）
+
     if (!module.empty()) {
-        formattedMessage << " [" << module << "]";
+        formatted << " [" << module << "]";
     }
-    
-    formattedMessage << " " << message;
-    
-    std::string finalMessage = formattedMessage.str();
-    
-    // 输出到控制台
-    if (useColors_) {
-        std::cout << getLevelColor(level) << finalMessage << getResetColor() << std::endl;
-    } else {
-        std::cout << finalMessage << std::endl;
+
+    formatted << " " << message;
+
+    const std::string entry = formatted.str();
+
+    if (consoleEnabled_) {
+        std::cout << entry << '\n';
+        std::cout.flush();
     }
-    std::cout.flush();  // 确保输出立即刷新
-    
-    // 输出到文件（无颜色）
-    if (fileStream_ && fileStream_->is_open()) {
-        *fileStream_ << finalMessage << std::endl;
+
+    if (fileEnabled_ && fileStream_ && fileStream_->is_open()) {
+        *fileStream_ << entry << '\n';
         fileStream_->flush();
     }
 }
 
 std::string Logger::getTimestamp() const {
-    auto now = std::chrono::system_clock::now();
-    auto time_t_now = std::chrono::system_clock::to_time_t(now);
-    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-        now.time_since_epoch()
-    ) % 1000;
-    
-    std::tm tm_now = *std::localtime(&time_t_now);
-    
-    std::ostringstream oss;
-    oss << std::put_time(&tm_now, "%Y-%m-%d %H:%M:%S")
-        << '.' << std::setfill('0') << std::setw(3) << ms.count();
-    
-    return oss.str();
+    const auto now = std::chrono::system_clock::now();
+    const auto timeNow = std::chrono::system_clock::to_time_t(now);
+
+    std::tm localTime {};
+#if defined(_WIN32)
+    localtime_s(&localTime, &timeNow);
+#else
+    localtime_r(&timeNow, &localTime);
+#endif
+
+    std::ostringstream timestamp;
+    timestamp << std::put_time(&localTime, "%Y-%m-%d %H:%M:%S");
+    return timestamp.str();
 }
 
 std::string Logger::levelToString(LogLevel level) const {
     switch (level) {
-        case LogLevel::DEBUG: return "DEBUG";
-        case LogLevel::INFO:  return "INFO";
-        case LogLevel::WARN:  return "WARN";
-        case LogLevel::ERROR: return "ERROR";
-        default: return "UNKNOWN";
+        case LogLevel::DEBUG:
+            return "DEBUG";
+        case LogLevel::INFO:
+            return "INFO";
+        case LogLevel::WARN:
+            return "WARN";
+        case LogLevel::ERROR:
+            return "ERROR";
+        default:
+            return "UNKNOWN";
     }
-}
-
-std::string Logger::getLevelColor(LogLevel level) const {
-    if (!useColors_) return "";
-    
-    switch (level) {
-        case LogLevel::DEBUG: return "\033[36m";  // 青色
-        case LogLevel::INFO:  return "\033[32m";  // 绿色
-        case LogLevel::WARN:  return "\033[33m";  // 黄色
-        case LogLevel::ERROR: return "\033[31m";  // 红色
-        default: return "\033[0m";  // 重置
-    }
-}
-
-std::string Logger::getResetColor() const {
-    return useColors_ ? "\033[0m" : "";
 }
 
 std::string Logger::extractFilename(const std::string& path) const {
-    // 查找最后一个目录分隔符
 #ifdef _WIN32
-    size_t pos = path.find_last_of("\\/");
+    const size_t pos = path.find_last_of("\\/");
 #else
-    size_t pos = path.find_last_of('/');
+    const size_t pos = path.find_last_of('/');
 #endif
-    
     if (pos == std::string::npos) {
-        return path;  // 没有目录分隔符，直接返回原路径
+        return path;
     }
-    
     return path.substr(pos + 1);
 }
 
-} // namespace myproject
+void Logger::resetOutputsLocked() {
+    fileEnabled_ = false;
+    consoleEnabled_ = false;
+    if (fileStream_ && fileStream_->is_open()) {
+        fileStream_->close();
+    }
+    fileStream_.reset();
+}
+
+bool Logger::openLogFileLocked(const std::string& filename) {
+    if (fileStream_ && fileStream_->is_open()) {
+        fileStream_->close();
+    }
+
+    fileStream_ = std::make_unique<std::ofstream>(filename, std::ios::out | std::ios::app);
+    if (!fileStream_->is_open()) {
+        fileStream_.reset();
+        return false;
+    }
+    return true;
+}
+
+std::string Logger::makeDefaultLogFilename() const {
+    const auto now = std::chrono::system_clock::now();
+    const auto timeNow = std::chrono::system_clock::to_time_t(now);
+
+    std::tm localTime {};
+#if defined(_WIN32)
+    localtime_s(&localTime, &timeNow);
+#else
+    localtime_r(&timeNow, &localTime);
+#endif
+
+    std::ostringstream filename;
+    filename << "log_"
+             << (localTime.tm_year + 1900) << "-"
+             << std::setfill('0') << std::setw(2) << (localTime.tm_mon + 1) << "-"
+             << std::setfill('0') << std::setw(2) << localTime.tm_mday << "_"
+             << std::setfill('0') << std::setw(2) << localTime.tm_hour << "-"
+             << std::setfill('0') << std::setw(2) << localTime.tm_min << "-"
+             << std::setfill('0') << std::setw(2) << localTime.tm_sec
+             << ".txt";
+    return filename.str();
+}
+
+}  // namespace myproject

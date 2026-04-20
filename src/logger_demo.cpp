@@ -1,6 +1,19 @@
 #include "myproject/logger.h"
+#include <cstdlib>
 #include <thread>
 #include <chrono>
+
+namespace {
+
+void setDemoEnv(const char* name, const char* value) {
+#if defined(_WIN32)
+    _putenv_s(name, value);
+#else
+    setenv(name, value, 1);
+#endif
+}
+
+}  // namespace
 
 void demoBasicLogging() {
     LOG_INFO("=== Basic Logging Demo ===");
@@ -77,9 +90,12 @@ void demoThreadSafety() {
 }
 
 int main() {
-    // Initialize logger (optional - will auto-initialize if not called)
+    setDemoEnv("LOG_OUTPUT", "both");
+    setDemoEnv("LOG_FILE", "demo_log.txt");
+    setDemoEnv("LOG_LEVEL", "debug");
+
     auto& logger = myproject::Logger::getInstance();
-    logger.init(myproject::LogLevel::DEBUG);
+    logger.init();
     
     LOG_INFO("Starting Logger Demo Application");
     

@@ -12,18 +12,10 @@ void threadFunction(int id) {
 }
 
 int main() {
-    // 添加调试输出
-    std::cerr << "DEBUG: 程序开始" << std::endl;
-    
-    // Initialize logger
     auto& logger = myproject::Logger::getInstance();
-    std::cerr << "DEBUG: 获取logger实例" << std::endl;
-    
     logger.init(myproject::LogLevel::INFO);
-    std::cerr << "DEBUG: logger初始化完成" << std::endl;
     
     LOG_INFO("Starting Calculator Application");
-    std::cerr << "DEBUG: 第一条日志已记录" << std::endl;
     
     std::cout << "Hello, World!" << std::endl;
 

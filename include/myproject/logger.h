@@ -1,13 +1,11 @@
 #pragma once
 
-#include <iostream>
 #include <fstream>
+#include <iostream>
+#include <mutex>
+#include <optional>
 #include <string>
 #include <memory>
-#include <mutex>
-#include <chrono>
-#include <iomanip>
-#include <sstream>
 
 namespace myproject {
 
@@ -35,17 +33,33 @@ public:
     static Logger& getInstance();
 
     /**
-     * @brief Initialize the logger with a minimum log level
-     * @param level Minimum log level to output (messages below this level are ignored)
-     *              Defaults to WARN as per task requirements
+     * @brief Initialize the logger from environment variables.
+     *
+     * `LOG_LEVEL` overrides the default severity when valid.
+     * `LOG_OUTPUT` controls console/file/both output and defaults to file.
+     * `LOG_FILE` sets the file path when file logging is enabled.
      */
-    void init(LogLevel level = LogLevel::WARN);
+    void init();
+
+    /**
+     * @brief Initialize the logger with an explicit default level.
+     *
+     * `LOG_LEVEL` still overrides the provided level when valid.
+     */
+    void init(LogLevel level);
+
+    /**
+     * @brief Shut down the logger and close any active file handles.
+     *
+     * Further log calls are ignored until the logger is initialized again.
+     */
+    void shutdown();
 
     /**
      * @brief Enable or disable file logging
      * @param filename If not empty, enables file logging to the specified file
      */
-    void enableFileLogging(const std::string& filename = "");
+    bool enableFileLogging(const std::string& filename = "");
 
     /**
      * @brief Disable file logging
@@ -112,6 +126,11 @@ private:
     Logger();
     ~Logger();
 
+    void initWithDefaults(std::optional<LogLevel> defaultLevel);
+    void resetOutputsLocked();
+    bool openLogFileLocked(const std::string& filename);
+    std::string makeDefaultLogFilename() const;
+
     /**
      * @brief Internal logging function with context information
      * @param level The log level
@@ -136,19 +155,6 @@ private:
     std::string levelToString(LogLevel level) const;
 
     /**
-     * @brief Get color code for log level (for console output)
-     * @param level The log level
-     * @return ANSI color code string
-     */
-    std::string getLevelColor(LogLevel level) const;
-
-    /**
-     * @brief Reset color code (for console output)
-     * @return ANSI reset code string
-     */
-    std::string getResetColor() const;
-
-    /**
      * @brief Extract filename from full path
      * @param path Full file path
      * @return Just the filename without directory
@@ -159,8 +165,10 @@ private:
     LogLevel minLevel_;
     std::unique_ptr<std::ofstream> fileStream_;
     std::mutex logMutex_;
-    bool useColors_;
     bool initialized_;
+    bool shutdown_;
+    bool consoleEnabled_;
+    bool fileEnabled_;
 };
 
 /**
