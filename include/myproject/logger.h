@@ -2,10 +2,10 @@
 
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
-#include <memory>
 
 namespace myproject {
 
@@ -130,6 +130,8 @@ private:
     void resetOutputsLocked();
     bool openLogFileLocked(const std::string& filename);
     std::string makeDefaultLogFilename() const;
+    std::string formatEntry(LogLevel level, const std::string& message, const std::string& file, int line, const std::string& module) const;
+    void writeEntryLocked(const std::string& entry);
 
     /**
      * @brief Internal logging function with context information
@@ -164,11 +166,11 @@ private:
     // Member variables
     LogLevel minLevel_;
     std::unique_ptr<std::ofstream> fileStream_;
-    std::mutex logMutex_;
     bool initialized_;
     bool shutdown_;
     bool consoleEnabled_;
     bool fileEnabled_;
+    std::shared_ptr<std::once_flag> autoInitFlag_;
 };
 
 /**

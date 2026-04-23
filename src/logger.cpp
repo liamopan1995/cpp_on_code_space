@@ -1,15 +1,28 @@
 #include "myproject/logger.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <cstdlib>
 #include <ctime>
 #include <iomanip>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <sstream>
 
+#if defined(_WIN32)
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
+
 namespace myproject {
 namespace {
+
+std::mutex g_loggerMutex;
+std::atomic<std::uint64_t> g_nextThreadNumber {1};
 
 std::string normalizeToken(const char* value) {
     if (value == nullptr) {
@@ -40,6 +53,30 @@ std::optional<LogLevel> parseLogLevelToken(const char* value) {
     return std::nullopt;
 }
 
+std::shared_ptr<std::once_flag> makeFreshOnceFlag() {
+    return std::make_shared<std::once_flag>();
+}
+
+std::shared_ptr<std::once_flag> makeSatisfiedOnceFlag() {
+    std::shared_ptr<std::once_flag> flag = makeFreshOnceFlag();
+    std::call_once(*flag, [] {});
+    return flag;
+}
+
+std::uint64_t currentThreadNumber() {
+    thread_local const std::uint64_t threadNumber =
+        g_nextThreadNumber.fetch_add(1, std::memory_order_relaxed);
+    return threadNumber;
+}
+
+int currentProcessId() {
+#if defined(_WIN32)
+    return _getpid();
+#else
+    return static_cast<int>(getpid());
+#endif
+}
+
 }  // namespace
 
 Logger& Logger::getInstance() {
@@ -52,7 +89,8 @@ Logger::Logger()
       initialized_(false),
       shutdown_(false),
       consoleEnabled_(false),
-      fileEnabled_(false) {
+      fileEnabled_(false),
+      autoInitFlag_(makeFreshOnceFlag()) {
 }
 
 Logger::~Logger() {
@@ -68,11 +106,12 @@ void Logger::init(LogLevel level) {
 }
 
 void Logger::initWithDefaults(std::optional<LogLevel> defaultLevel) {
-    std::lock_guard<std::mutex> lock(logMutex_);
+    std::lock_guard<std::mutex> lock(g_loggerMutex);
 
     resetOutputsLocked();
     shutdown_ = false;
     initialized_ = true;
+    autoInitFlag_ = makeSatisfiedOnceFlag();
 
     minLevel_ = defaultLevel.value_or(LogLevel::WARN);
 
@@ -112,14 +151,15 @@ void Logger::initWithDefaults(std::optional<LogLevel> defaultLevel) {
 }
 
 void Logger::shutdown() {
-    std::lock_guard<std::mutex> lock(logMutex_);
+    std::lock_guard<std::mutex> lock(g_loggerMutex);
     resetOutputsLocked();
     initialized_ = false;
     shutdown_ = true;
+    autoInitFlag_ = makeSatisfiedOnceFlag();
 }
 
 bool Logger::enableFileLogging(const std::string& filename) {
-    std::lock_guard<std::mutex> lock(logMutex_);
+    std::lock_guard<std::mutex> lock(g_loggerMutex);
 
     if (shutdown_) {
         shutdown_ = false;
@@ -129,11 +169,12 @@ bool Logger::enableFileLogging(const std::string& filename) {
     }
 
     fileEnabled_ = openLogFileLocked(filename.empty() ? makeDefaultLogFilename() : filename);
+    autoInitFlag_ = makeSatisfiedOnceFlag();
     return fileEnabled_;
 }
 
 void Logger::disableFileLogging() {
-    std::lock_guard<std::mutex> lock(logMutex_);
+    std::lock_guard<std::mutex> lock(g_loggerMutex);
     fileEnabled_ = false;
     if (fileStream_ && fileStream_->is_open()) {
         fileStream_->close();
@@ -142,7 +183,7 @@ void Logger::disableFileLogging() {
 }
 
 void Logger::setLogLevel(LogLevel level) {
-    std::lock_guard<std::mutex> lock(logMutex_);
+    std::lock_guard<std::mutex> lock(g_loggerMutex);
     minLevel_ = level;
 }
 
@@ -163,20 +204,62 @@ void Logger::error(const std::string& message, const std::string& file, int line
 }
 
 void Logger::log(LogLevel level, const std::string& message, const std::string& file, int line, const std::string& module) {
-    bool shouldInit = false;
+    std::shared_ptr<std::once_flag> autoInitFlag;
     {
-        std::lock_guard<std::mutex> lock(logMutex_);
+        std::lock_guard<std::mutex> lock(g_loggerMutex);
         if (shutdown_) {
             return;
         }
-        shouldInit = !initialized_;
+        autoInitFlag = autoInitFlag_;
     }
 
-    if (shouldInit) {
-        init();
-    }
+    std::call_once(*autoInitFlag, [this]() {
+        std::lock_guard<std::mutex> lock(g_loggerMutex);
+        if (shutdown_ || initialized_) {
+            return;
+        }
+        resetOutputsLocked();
+        shutdown_ = false;
+        initialized_ = true;
 
-    std::lock_guard<std::mutex> lock(logMutex_);
+        minLevel_ = LogLevel::WARN;
+
+        const char* levelEnv = std::getenv("LOG_LEVEL");
+        const std::optional<LogLevel> envLevel = parseLogLevelToken(levelEnv);
+        if (envLevel.has_value()) {
+            minLevel_ = *envLevel;
+        } else if (levelEnv != nullptr && levelEnv[0] != '\0') {
+            minLevel_ = LogLevel::WARN;
+        }
+
+        const std::string outputMode = normalizeToken(std::getenv("LOG_OUTPUT"));
+        if (outputMode == "console") {
+            consoleEnabled_ = true;
+            fileEnabled_ = false;
+        } else if (outputMode == "both") {
+            consoleEnabled_ = true;
+            fileEnabled_ = true;
+        } else {
+            consoleEnabled_ = false;
+            fileEnabled_ = true;
+        }
+
+        if (!fileEnabled_) {
+            return;
+        }
+
+        const char* fileEnv = std::getenv("LOG_FILE");
+        const std::string path = (fileEnv != nullptr && fileEnv[0] != '\0')
+            ? std::string(fileEnv)
+            : makeDefaultLogFilename();
+
+        if (!openLogFileLocked(path)) {
+            fileEnabled_ = false;
+            consoleEnabled_ = true;
+        }
+    });
+
+    std::lock_guard<std::mutex> lock(g_loggerMutex);
     if (shutdown_ || !initialized_ || level < minLevel_) {
         return;
     }
@@ -185,30 +268,8 @@ void Logger::log(LogLevel level, const std::string& message, const std::string& 
 }
 
 void Logger::logInternal(LogLevel level, const std::string& message, const std::string& file, int line, const std::string& module) {
-    std::ostringstream formatted;
-    formatted << "[" << getTimestamp() << "] [" << levelToString(level) << "]";
-
-    if (!file.empty() && line > 0) {
-        formatted << " [" << extractFilename(file) << ":" << line << "]";
-    }
-
-    if (!module.empty()) {
-        formatted << " [" << module << "]";
-    }
-
-    formatted << " " << message;
-
-    const std::string entry = formatted.str();
-
-    if (consoleEnabled_) {
-        std::cout << entry << '\n';
-        std::cout.flush();
-    }
-
-    if (fileEnabled_ && fileStream_ && fileStream_->is_open()) {
-        *fileStream_ << entry << '\n';
-        fileStream_->flush();
-    }
+    const std::string entry = formatEntry(level, message, file, line, module);
+    writeEntryLocked(entry);
 }
 
 std::string Logger::getTimestamp() const {
@@ -274,6 +335,44 @@ bool Logger::openLogFileLocked(const std::string& filename) {
         return false;
     }
     return true;
+}
+
+std::string Logger::formatEntry(
+    LogLevel level,
+    const std::string& message,
+    const std::string& file,
+    int line,
+    const std::string& module) const {
+    std::ostringstream formatted;
+    formatted << "[" << getTimestamp() << "]"
+              << " [" << levelToString(level) << "]"
+              << " [pid=" << currentProcessId() << "]"
+              << " [thread=" << currentThreadNumber() << "]";
+
+    if (!file.empty() && line > 0) {
+        formatted << " [" << extractFilename(file) << ":" << line << "]";
+    }
+
+    if (!module.empty()) {
+        formatted << " [" << module << "]";
+    }
+
+    formatted << " " << message;
+    return formatted.str();
+}
+
+void Logger::writeEntryLocked(const std::string& entry) {
+    if (consoleEnabled_) {
+        std::cout.write(entry.data(), static_cast<std::streamsize>(entry.size()));
+        std::cout.put('\n');
+        std::cout.flush();
+    }
+
+    if (fileEnabled_ && fileStream_ && fileStream_->is_open()) {
+        fileStream_->write(entry.data(), static_cast<std::streamsize>(entry.size()));
+        fileStream_->put('\n');
+        fileStream_->flush();
+    }
 }
 
 std::string Logger::makeDefaultLogFilename() const {

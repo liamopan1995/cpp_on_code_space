@@ -1,11 +1,15 @@
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
 #include <regex>
+#include <set>
 #include <sstream>
 #include <string>
+#include <thread>
+#include <vector>
 
 #include "myproject/logger.h"
 
@@ -48,6 +52,18 @@ void setOrClearEnv(const char* name, const std::string& value) {
     }
 }
 
+std::vector<std::string> splitNonEmptyLines(const std::string& text) {
+    std::vector<std::string> lines;
+    std::istringstream input(text);
+    std::string line;
+    while (std::getline(input, line)) {
+        if (!line.empty()) {
+            lines.push_back(line);
+        }
+    }
+    return lines;
+}
+
 }  // namespace
 
 class LoggerTest : public ::testing::Test {
@@ -84,6 +100,8 @@ protected:
         std::remove("test_logger_reinit.log");
         std::remove("test_logger_shutdown.log");
         std::remove("test_logger_format.log");
+        std::remove("test_logger_context.log");
+        std::remove("test_logger_concurrent.log");
         std::remove("test_logger_runtime.log");
     }
 
@@ -191,8 +209,27 @@ TEST_F(LoggerTest, LogEntryContainsTimestampFileLineAndModuleWhenProvided) {
 
     const std::string contents = readFile("test_logger_format.log");
     const std::regex pattern(
-        R"(\[[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\] \[INFO\] \[test_logger\.cpp:[0-9]+\] \[FormatModule\] formatted message)");
+        R"(\[[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\] \[INFO\] \[pid=[0-9]+\] \[thread=[0-9]+\] \[test_logger\.cpp:[0-9]+\] \[FormatModule\] formatted message)");
     EXPECT_TRUE(std::regex_search(contents, pattern)) << contents;
+}
+
+TEST_F(LoggerTest, LogEntryContainsProcessAndThreadContextOnConsoleAndFile) {
+    setenv("LOG_OUTPUT", "both", 1);
+    setenv("LOG_FILE", "test_logger_context.log", 1);
+    CoutCapture capture;
+
+    auto& logger = myproject::Logger::getInstance();
+    logger.init(myproject::LogLevel::INFO);
+
+    LOG_INFO_MODULE("context message", "ContextModule");
+
+    const std::regex pattern(
+        R"(\[[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\] \[INFO\] \[pid=[0-9]+\] \[thread=[0-9]+\] \[test_logger\.cpp:[0-9]+\] \[ContextModule\] context message)");
+    const std::string consoleOutput = capture.str();
+    const std::string fileOutput = readFile("test_logger_context.log");
+
+    EXPECT_TRUE(std::regex_search(consoleOutput, pattern)) << consoleOutput;
+    EXPECT_TRUE(std::regex_search(fileOutput, pattern)) << fileOutput;
 }
 
 TEST_F(LoggerTest, ShutdownPreventsFurtherWritesUntilReinitialized) {
@@ -265,4 +302,76 @@ TEST_F(LoggerTest, RuntimeFileLoggingFailureDoesNotBreakConsoleLogging) {
     LOG_INFO("console still works");
 
     EXPECT_NE(capture.str().find("console still works"), std::string::npos);
+}
+
+TEST_F(LoggerTest, ConcurrentLoggingProducesCompleteSerializedLinesOnConsoleAndFile) {
+    setenv("LOG_OUTPUT", "both", 1);
+    setenv("LOG_FILE", "test_logger_concurrent.log", 1);
+    CoutCapture capture;
+
+    auto& logger = myproject::Logger::getInstance();
+    logger.init(myproject::LogLevel::INFO);
+
+    constexpr int kThreadCount = 4;
+    constexpr int kMessagesPerThread = 20;
+    std::atomic<bool> startLogging {false};
+    std::vector<std::thread> workers;
+    workers.reserve(kThreadCount);
+
+    for (int threadIndex = 0; threadIndex < kThreadCount; ++threadIndex) {
+        workers.emplace_back([&logger, &startLogging, threadIndex]() {
+            while (!startLogging.load(std::memory_order_acquire)) {
+                std::this_thread::yield();
+            }
+
+            for (int messageIndex = 0; messageIndex < kMessagesPerThread; ++messageIndex) {
+                logger.info(
+                    "concurrent t" + std::to_string(threadIndex) + "-m" + std::to_string(messageIndex),
+                    __FILE__,
+                    __LINE__,
+                    "Concurrent");
+            }
+        });
+    }
+
+    startLogging.store(true, std::memory_order_release);
+    for (std::thread& worker : workers) {
+        worker.join();
+    }
+
+    const std::regex linePattern(
+        R"(^\[[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\] \[INFO\] \[pid=([0-9]+)\] \[thread=([0-9]+)\] \[test_logger\.cpp:[0-9]+\] \[Concurrent\] (concurrent t[0-9]+-m[0-9]+)$)");
+
+    std::set<std::string> expectedMessages;
+    for (int threadIndex = 0; threadIndex < kThreadCount; ++threadIndex) {
+        for (int messageIndex = 0; messageIndex < kMessagesPerThread; ++messageIndex) {
+            expectedMessages.insert(
+                "concurrent t" + std::to_string(threadIndex) + "-m" + std::to_string(messageIndex));
+        }
+    }
+
+    auto validateOutput = [&](const std::string& output) {
+        const std::vector<std::string> lines = splitNonEmptyLines(output);
+        std::set<std::string> observedMessages;
+        std::set<std::string> observedThreads;
+
+        EXPECT_EQ(lines.size(), expectedMessages.size()) << output;
+
+        for (const std::string& line : lines) {
+            std::smatch match;
+            const bool matched = std::regex_match(line, match, linePattern);
+            EXPECT_TRUE(matched) << line;
+            if (!matched) {
+                continue;
+            }
+            observedThreads.insert(match[2].str());
+            observedMessages.insert(match[3].str());
+        }
+
+        EXPECT_EQ(observedMessages, expectedMessages);
+        EXPECT_EQ(observedThreads.size(), static_cast<std::size_t>(kThreadCount));
+    };
+
+    validateOutput(capture.str());
+    validateOutput(readFile("test_logger_concurrent.log"));
 }
