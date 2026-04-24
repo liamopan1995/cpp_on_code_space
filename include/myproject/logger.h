@@ -36,8 +36,9 @@ public:
      * @brief Initialize the logger from environment variables.
      *
      * `LOG_LEVEL` overrides the default severity when valid.
-     * `LOG_OUTPUT` controls console/file/both output and defaults to file.
+     * `LOG_OUTPUT` controls console/file/both/daemon output and defaults to file.
      * `LOG_FILE` sets the file path when file logging is enabled.
+     * `LOG_DAEMON_ADDR` sets the daemon address when daemon output is enabled.
      */
     void init();
 
@@ -132,6 +133,8 @@ private:
     std::string makeDefaultLogFilename() const;
     std::string formatEntry(LogLevel level, const std::string& message, const std::string& file, int line, const std::string& module) const;
     void writeEntryLocked(const std::string& entry);
+    bool connectDaemonLocked();
+    void disableDaemonLocked();
 
     /**
      * @brief Internal logging function with context information
@@ -170,6 +173,9 @@ private:
     bool shutdown_;
     bool consoleEnabled_;
     bool fileEnabled_;
+    bool daemonEnabled_;
+    std::string daemonAddr_;
+    std::optional<int> daemonSocketFd_;
     std::shared_ptr<std::once_flag> autoInitFlag_;
 };
 

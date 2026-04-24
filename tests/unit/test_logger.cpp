@@ -1,15 +1,30 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <optional>
 #include <regex>
 #include <set>
 #include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
+
+#if !defined(_WIN32)
+#include <arpa/inet.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <sys/un.h>
+#include <unistd.h>
+#include <cerrno>
+#endif
 
 #include "myproject/logger.h"
 
@@ -64,6 +79,199 @@ std::vector<std::string> splitNonEmptyLines(const std::string& text) {
     return lines;
 }
 
+#if !defined(_WIN32)
+class DaemonServer {
+public:
+    DaemonServer() {
+        listenFd_ = createListeningSocket();
+        acceptThread_ = std::thread([this]() { acceptLoop(); });
+    }
+
+    ~DaemonServer() {
+        running_.store(false, std::memory_order_relaxed);
+        const int client = clientFd_.exchange(-1, std::memory_order_acq_rel);
+        if (client >= 0) {
+            shutdown(client, SHUT_RDWR);
+            close(client);
+        }
+        if (listenFd_ >= 0) {
+            close(listenFd_);
+            listenFd_ = -1;
+        }
+        if (!unixPath_.empty()) {
+            unlink(unixPath_.c_str());
+            unixPath_.clear();
+        }
+        if (acceptThread_.joinable()) {
+            acceptThread_.join();
+        }
+    }
+
+    std::string address() const {
+        return boundAddr_;
+    }
+
+    bool waitForSubstring(const std::string& needle, std::chrono::milliseconds timeout) {
+        std::unique_lock<std::mutex> lock(mutex_);
+        return cv_.wait_for(lock, timeout, [&]() {
+            for (const std::string& line : lines_) {
+                if (line.find(needle) != std::string::npos) {
+                    return true;
+                }
+            }
+            return false;
+        });
+    }
+
+private:
+    int createListeningSocket() {
+        const int udsFd = socket(AF_UNIX, SOCK_STREAM, 0);
+        if (udsFd >= 0) {
+            unixPath_ = "/tmp/test_logdaemon_" + std::to_string(getpid()) + "_" +
+                std::to_string(reinterpret_cast<std::uintptr_t>(this)) + ".sock";
+
+            sockaddr_un addr {};
+            addr.sun_family = AF_UNIX;
+            std::snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", unixPath_.c_str());
+            unlink(unixPath_.c_str());
+
+            if (bind(udsFd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0 &&
+                listen(udsFd, 8) == 0) {
+                boundAddr_ = "unix:" + unixPath_;
+                return udsFd;
+            }
+
+            close(udsFd);
+            unixPath_.clear();
+        }
+
+        struct addrinfo hints {};
+        hints.ai_family = AF_INET;
+        hints.ai_socktype = SOCK_STREAM;
+        hints.ai_flags = AI_PASSIVE;
+
+        struct addrinfo* results = nullptr;
+        if (getaddrinfo("127.0.0.1", "0", &hints, &results) != 0) {
+            return -1;
+        }
+
+        int listenFd = -1;
+        for (struct addrinfo* rp = results; rp != nullptr; rp = rp->ai_next) {
+            const int fd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+            if (fd < 0) {
+                continue;
+            }
+
+            int reuse = 1;
+            setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+
+            if (bind(fd, rp->ai_addr, static_cast<socklen_t>(rp->ai_addrlen)) != 0) {
+                close(fd);
+                continue;
+            }
+
+            if (listen(fd, 8) != 0) {
+                close(fd);
+                continue;
+            }
+
+            sockaddr_storage local {};
+            socklen_t localLen = sizeof(local);
+            if (getsockname(fd, reinterpret_cast<sockaddr*>(&local), &localLen) == 0) {
+                char hostBuf[NI_MAXHOST] {};
+                char serviceBuf[NI_MAXSERV] {};
+                if (getnameinfo(reinterpret_cast<sockaddr*>(&local),
+                                localLen,
+                                hostBuf,
+                                sizeof(hostBuf),
+                                serviceBuf,
+                                sizeof(serviceBuf),
+                                NI_NUMERICHOST | NI_NUMERICSERV) == 0) {
+                    boundAddr_ = std::string(hostBuf) + ":" + std::string(serviceBuf);
+                }
+            }
+
+            listenFd = fd;
+            break;
+        }
+
+        freeaddrinfo(results);
+        return listenFd;
+    }
+
+    void acceptLoop() {
+        if (listenFd_ < 0) {
+            return;
+        }
+
+        sockaddr_storage peer {};
+        socklen_t peerLen = sizeof(peer);
+        const int clientFd = accept(listenFd_, reinterpret_cast<sockaddr*>(&peer), &peerLen);
+        if (clientFd < 0) {
+            return;
+        }
+        clientFd_.store(clientFd, std::memory_order_release);
+
+        struct timeval tv {};
+        tv.tv_sec = 0;
+        tv.tv_usec = 100 * 1000;
+        setsockopt(clientFd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+        std::string buffer;
+        buffer.resize(4096);
+        std::string carry;
+
+        while (running_.load(std::memory_order_relaxed)) {
+            const ssize_t readBytes = read(clientFd, buffer.data(), buffer.size());
+            if (readBytes < 0) {
+                if (errno == EINTR) {
+                    continue;
+                }
+                if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    continue;
+                }
+                break;
+            }
+            if (readBytes == 0) {
+                break;
+            }
+
+            carry.append(buffer.data(), static_cast<std::size_t>(readBytes));
+            std::size_t start = 0;
+            while (true) {
+                const std::size_t pos = carry.find('\n', start);
+                if (pos == std::string::npos) {
+                    break;
+                }
+                const std::string line = carry.substr(start, pos - start);
+                start = pos + 1;
+                if (!line.empty()) {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    lines_.push_back(line);
+                    cv_.notify_all();
+                }
+            }
+            if (start > 0) {
+                carry.erase(0, start);
+            }
+        }
+
+        close(clientFd);
+        clientFd_.store(-1, std::memory_order_release);
+    }
+
+    std::atomic<bool> running_ {true};
+    int listenFd_ {-1};
+    std::atomic<int> clientFd_ {-1};
+    std::string boundAddr_;
+    std::string unixPath_;
+    std::thread acceptThread_;
+    mutable std::mutex mutex_;
+    std::condition_variable cv_;
+    std::vector<std::string> lines_;
+};
+#endif
+
 }  // namespace
 
 class LoggerTest : public ::testing::Test {
@@ -72,10 +280,12 @@ protected:
         saveEnv("LOG_FILE", originalLogFile_);
         saveEnv("LOG_LEVEL", originalLogLevel_);
         saveEnv("LOG_OUTPUT", originalLogOutput_);
+        saveEnv("LOG_DAEMON_ADDR", originalLogDaemonAddr_);
 
         unsetenv("LOG_FILE");
         unsetenv("LOG_LEVEL");
         unsetenv("LOG_OUTPUT");
+        unsetenv("LOG_DAEMON_ADDR");
 
         cleanupFiles();
         myproject::Logger::getInstance().shutdown();
@@ -86,6 +296,7 @@ protected:
         setOrClearEnv("LOG_FILE", originalLogFile_);
         setOrClearEnv("LOG_LEVEL", originalLogLevel_);
         setOrClearEnv("LOG_OUTPUT", originalLogOutput_);
+        setOrClearEnv("LOG_DAEMON_ADDR", originalLogDaemonAddr_);
         cleanupFiles();
     }
 
@@ -108,6 +319,7 @@ protected:
     std::string originalLogFile_;
     std::string originalLogLevel_;
     std::string originalLogOutput_;
+    std::string originalLogDaemonAddr_;
 };
 
 TEST_F(LoggerTest, LogLevelDefaultsToWarning) {
@@ -375,3 +587,37 @@ TEST_F(LoggerTest, ConcurrentLoggingProducesCompleteSerializedLinesOnConsoleAndF
     validateOutput(capture.str());
     validateOutput(readFile("test_logger_concurrent.log"));
 }
+
+#if !defined(_WIN32)
+TEST_F(LoggerTest, DaemonOutputSendsEntriesToDaemonServer) {
+    DaemonServer server;
+    if (server.address().empty()) {
+        GTEST_SKIP() << "No local IPC transport available for daemon test";
+    }
+
+    setenv("LOG_OUTPUT", "daemon", 1);
+    setenv("LOG_DAEMON_ADDR", server.address().c_str(), 1);
+    CoutCapture capture;
+
+    auto& logger = myproject::Logger::getInstance();
+    logger.init(myproject::LogLevel::INFO);
+
+    LOG_INFO("daemon message");
+
+    EXPECT_TRUE(capture.str().empty()) << capture.str();
+    EXPECT_TRUE(server.waitForSubstring("daemon message", std::chrono::milliseconds(500)));
+}
+
+TEST_F(LoggerTest, DaemonUnreachableFallsBackToConsoleWithoutBlocking) {
+    setenv("LOG_OUTPUT", "daemon", 1);
+    setenv("LOG_DAEMON_ADDR", "127.0.0.1:1", 1);  // unlikely to be listening
+    CoutCapture capture;
+
+    auto& logger = myproject::Logger::getInstance();
+    logger.init(myproject::LogLevel::INFO);
+
+    LOG_INFO("fallback message");
+
+    EXPECT_NE(capture.str().find("fallback message"), std::string::npos);
+}
+#endif

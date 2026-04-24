@@ -11,10 +11,21 @@
 #include <mutex>
 #include <optional>
 #include <sstream>
+#include <string>
+#include <vector>
 
 #if defined(_WIN32)
 #include <process.h>
 #else
+#include <cerrno>
+#include <cstring>
+#include <fcntl.h>
+#include <netdb.h>
+#include <sys/select.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <sys/types.h>
+#include <sys/un.h>
 #include <unistd.h>
 #endif
 
@@ -77,6 +88,193 @@ int currentProcessId() {
 #endif
 }
 
+struct DaemonEndpoint {
+    enum class Kind {
+        kNone,
+        kUnix,
+        kTcp
+    };
+
+    Kind kind {Kind::kNone};
+    std::string host;
+    std::string port;
+    std::string path;
+};
+
+std::vector<std::string> splitTokens(const std::string& value, char delimiter) {
+    std::vector<std::string> tokens;
+    std::size_t start = 0;
+    while (start <= value.size()) {
+        const std::size_t pos = value.find(delimiter, start);
+        const std::size_t end = (pos == std::string::npos) ? value.size() : pos;
+        if (end > start) {
+            tokens.push_back(value.substr(start, end - start));
+        }
+        if (pos == std::string::npos) {
+            break;
+        }
+        start = pos + 1;
+    }
+    return tokens;
+}
+
+DaemonEndpoint parseDaemonEndpoint(const std::string& addr) {
+    if (addr.empty()) {
+        return {};
+    }
+
+    if (addr.rfind("unix:", 0) == 0) {
+        const std::string path = addr.substr(std::strlen("unix:"));
+        if (path.empty()) {
+            return {};
+        }
+        DaemonEndpoint endpoint;
+        endpoint.kind = DaemonEndpoint::Kind::kUnix;
+        endpoint.path = path;
+        return endpoint;
+    }
+
+    if (!addr.empty() && addr[0] == '/') {
+        DaemonEndpoint endpoint;
+        endpoint.kind = DaemonEndpoint::Kind::kUnix;
+        endpoint.path = addr;
+        return endpoint;
+    }
+
+    const std::size_t colon = addr.rfind(':');
+    if (colon == std::string::npos || colon == 0 || colon + 1 >= addr.size()) {
+        return {};
+    }
+
+    DaemonEndpoint endpoint;
+    endpoint.kind = DaemonEndpoint::Kind::kTcp;
+    endpoint.host = addr.substr(0, colon);
+    endpoint.port = addr.substr(colon + 1);
+    return endpoint;
+}
+
+#if !defined(_WIN32)
+bool setNonBlocking(int fd, bool enabled) {
+    const int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0) {
+        return false;
+    }
+    const int updated = enabled ? (flags | O_NONBLOCK) : (flags & ~O_NONBLOCK);
+    return fcntl(fd, F_SETFL, updated) == 0;
+}
+
+bool waitForConnect(int fd, std::chrono::milliseconds timeout) {
+    fd_set writeSet;
+    FD_ZERO(&writeSet);
+    FD_SET(fd, &writeSet);
+
+    struct timeval tv {};
+    tv.tv_sec = static_cast<long>(timeout.count() / 1000);
+    tv.tv_usec = static_cast<long>((timeout.count() % 1000) * 1000);
+
+    const int result = select(fd + 1, nullptr, &writeSet, nullptr, &tv);
+    if (result <= 0) {
+        return false;
+    }
+
+    int error = 0;
+    socklen_t errorLen = sizeof(error);
+    if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &errorLen) != 0) {
+        return false;
+    }
+    return error == 0;
+}
+
+void setSocketTimeouts(int fd, std::chrono::milliseconds timeout) {
+    struct timeval tv {};
+    tv.tv_sec = static_cast<long>(timeout.count() / 1000);
+    tv.tv_usec = static_cast<long>((timeout.count() % 1000) * 1000);
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+}
+
+int connectTcp(const std::string& host, const std::string& port) {
+    struct addrinfo hints {};
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+
+    struct addrinfo* results = nullptr;
+    const int gai = getaddrinfo(host.c_str(), port.c_str(), &hints, &results);
+    if (gai != 0) {
+        return -1;
+    }
+
+    int connectedFd = -1;
+    for (struct addrinfo* rp = results; rp != nullptr; rp = rp->ai_next) {
+        const int fd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+        if (fd < 0) {
+            continue;
+        }
+
+        if (!setNonBlocking(fd, true)) {
+            close(fd);
+            continue;
+        }
+
+        const int rc = connect(fd, rp->ai_addr, static_cast<socklen_t>(rp->ai_addrlen));
+        if (rc == 0) {
+            setNonBlocking(fd, false);
+            setSocketTimeouts(fd, std::chrono::milliseconds(50));
+            connectedFd = fd;
+            break;
+        }
+
+        if (errno == EINPROGRESS && waitForConnect(fd, std::chrono::milliseconds(100))) {
+            setNonBlocking(fd, false);
+            setSocketTimeouts(fd, std::chrono::milliseconds(50));
+            connectedFd = fd;
+            break;
+        }
+
+        close(fd);
+    }
+
+    freeaddrinfo(results);
+    return connectedFd;
+}
+
+int connectUnix(const std::string& path) {
+    if (path.size() >= sizeof(sockaddr_un::sun_path)) {
+        return -1;
+    }
+
+    const int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) {
+        return -1;
+    }
+
+    if (!setNonBlocking(fd, true)) {
+        close(fd);
+        return -1;
+    }
+
+    sockaddr_un addr {};
+    addr.sun_family = AF_UNIX;
+    std::strncpy(addr.sun_path, path.c_str(), sizeof(addr.sun_path) - 1);
+
+    const int rc = connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
+    if (rc == 0) {
+        setNonBlocking(fd, false);
+        setSocketTimeouts(fd, std::chrono::milliseconds(50));
+        return fd;
+    }
+
+    if (errno == EINPROGRESS && waitForConnect(fd, std::chrono::milliseconds(100))) {
+        setNonBlocking(fd, false);
+        setSocketTimeouts(fd, std::chrono::milliseconds(50));
+        return fd;
+    }
+
+    close(fd);
+    return -1;
+}
+#endif
+
 }  // namespace
 
 Logger& Logger::getInstance() {
@@ -90,6 +288,9 @@ Logger::Logger()
       shutdown_(false),
       consoleEnabled_(false),
       fileEnabled_(false),
+      daemonEnabled_(false),
+      daemonAddr_(),
+      daemonSocketFd_(std::nullopt),
       autoInitFlag_(makeFreshOnceFlag()) {
 }
 
@@ -124,29 +325,49 @@ void Logger::initWithDefaults(std::optional<LogLevel> defaultLevel) {
     }
 
     const std::string outputMode = normalizeToken(std::getenv("LOG_OUTPUT"));
-    if (outputMode == "console") {
-        consoleEnabled_ = true;
-        fileEnabled_ = false;
-    } else if (outputMode == "both") {
-        consoleEnabled_ = true;
-        fileEnabled_ = true;
-    } else {
-        consoleEnabled_ = false;
+    bool anyKnownToken = false;
+    for (const std::string& token : splitTokens(outputMode, '+')) {
+        if (token == "console") {
+            consoleEnabled_ = true;
+            anyKnownToken = true;
+        } else if (token == "file") {
+            fileEnabled_ = true;
+            anyKnownToken = true;
+        } else if (token == "both") {
+            consoleEnabled_ = true;
+            fileEnabled_ = true;
+            anyKnownToken = true;
+        } else if (token == "daemon") {
+            daemonEnabled_ = true;
+            anyKnownToken = true;
+        }
+    }
+
+    if (!anyKnownToken) {
         fileEnabled_ = true;
     }
 
-    if (!fileEnabled_) {
-        return;
+    if (fileEnabled_) {
+        const char* fileEnv = std::getenv("LOG_FILE");
+        const std::string path = (fileEnv != nullptr && fileEnv[0] != '\0')
+            ? std::string(fileEnv)
+            : makeDefaultLogFilename();
+
+        if (!openLogFileLocked(path)) {
+            fileEnabled_ = false;
+            consoleEnabled_ = true;
+        }
     }
 
-    const char* fileEnv = std::getenv("LOG_FILE");
-    const std::string path = (fileEnv != nullptr && fileEnv[0] != '\0')
-        ? std::string(fileEnv)
-        : makeDefaultLogFilename();
-
-    if (!openLogFileLocked(path)) {
-        fileEnabled_ = false;
-        consoleEnabled_ = true;
+    if (daemonEnabled_) {
+        const char* addrEnv = std::getenv("LOG_DAEMON_ADDR");
+        daemonAddr_ = (addrEnv != nullptr && addrEnv[0] != '\0') ? std::string(addrEnv) : "";
+        if (!connectDaemonLocked()) {
+            if (!consoleEnabled_ && !fileEnabled_) {
+                consoleEnabled_ = true;
+            }
+            daemonEnabled_ = false;
+        }
     }
 }
 
@@ -233,29 +454,49 @@ void Logger::log(LogLevel level, const std::string& message, const std::string& 
         }
 
         const std::string outputMode = normalizeToken(std::getenv("LOG_OUTPUT"));
-        if (outputMode == "console") {
-            consoleEnabled_ = true;
-            fileEnabled_ = false;
-        } else if (outputMode == "both") {
-            consoleEnabled_ = true;
-            fileEnabled_ = true;
-        } else {
-            consoleEnabled_ = false;
+        bool anyKnownToken = false;
+        for (const std::string& token : splitTokens(outputMode, '+')) {
+            if (token == "console") {
+                consoleEnabled_ = true;
+                anyKnownToken = true;
+            } else if (token == "file") {
+                fileEnabled_ = true;
+                anyKnownToken = true;
+            } else if (token == "both") {
+                consoleEnabled_ = true;
+                fileEnabled_ = true;
+                anyKnownToken = true;
+            } else if (token == "daemon") {
+                daemonEnabled_ = true;
+                anyKnownToken = true;
+            }
+        }
+
+        if (!anyKnownToken) {
             fileEnabled_ = true;
         }
 
-        if (!fileEnabled_) {
-            return;
+        if (fileEnabled_) {
+            const char* fileEnv = std::getenv("LOG_FILE");
+            const std::string path = (fileEnv != nullptr && fileEnv[0] != '\0')
+                ? std::string(fileEnv)
+                : makeDefaultLogFilename();
+
+            if (!openLogFileLocked(path)) {
+                fileEnabled_ = false;
+                consoleEnabled_ = true;
+            }
         }
 
-        const char* fileEnv = std::getenv("LOG_FILE");
-        const std::string path = (fileEnv != nullptr && fileEnv[0] != '\0')
-            ? std::string(fileEnv)
-            : makeDefaultLogFilename();
-
-        if (!openLogFileLocked(path)) {
-            fileEnabled_ = false;
-            consoleEnabled_ = true;
+        if (daemonEnabled_) {
+            const char* addrEnv = std::getenv("LOG_DAEMON_ADDR");
+            daemonAddr_ = (addrEnv != nullptr && addrEnv[0] != '\0') ? std::string(addrEnv) : "";
+            if (!connectDaemonLocked()) {
+                if (!consoleEnabled_ && !fileEnabled_) {
+                    consoleEnabled_ = true;
+                }
+                daemonEnabled_ = false;
+            }
         }
     });
 
@@ -318,6 +559,9 @@ std::string Logger::extractFilename(const std::string& path) const {
 void Logger::resetOutputsLocked() {
     fileEnabled_ = false;
     consoleEnabled_ = false;
+    daemonEnabled_ = false;
+    daemonAddr_.clear();
+    disableDaemonLocked();
     if (fileStream_ && fileStream_->is_open()) {
         fileStream_->close();
     }
@@ -373,6 +617,52 @@ void Logger::writeEntryLocked(const std::string& entry) {
         fileStream_->put('\n');
         fileStream_->flush();
     }
+
+    if (daemonEnabled_) {
+        if (!daemonSocketFd_.has_value() && !connectDaemonLocked()) {
+            if (!consoleEnabled_ && !fileEnabled_) {
+                consoleEnabled_ = true;
+                std::cout.write(entry.data(), static_cast<std::streamsize>(entry.size()));
+                std::cout.put('\n');
+                std::cout.flush();
+            }
+            daemonEnabled_ = false;
+            return;
+        }
+
+#if !defined(_WIN32)
+        if (daemonSocketFd_.has_value()) {
+            const std::string frame = entry + "\n";
+            const int fd = *daemonSocketFd_;
+            std::size_t offset = 0;
+            while (offset < frame.size()) {
+                const ssize_t sent = send(
+                    fd,
+                    frame.data() + offset,
+                    frame.size() - offset,
+                    MSG_NOSIGNAL);
+                if (sent < 0) {
+                    if (errno == EINTR) {
+                        continue;
+                    }
+                    disableDaemonLocked();
+                    if (!consoleEnabled_ && !fileEnabled_) {
+                        consoleEnabled_ = true;
+                        std::cout.write(entry.data(), static_cast<std::streamsize>(entry.size()));
+                        std::cout.put('\n');
+                        std::cout.flush();
+                    }
+                    daemonEnabled_ = false;
+                    break;
+                }
+                if (sent == 0) {
+                    break;
+                }
+                offset += static_cast<std::size_t>(sent);
+            }
+        }
+#endif
+    }
 }
 
 std::string Logger::makeDefaultLogFilename() const {
@@ -396,6 +686,46 @@ std::string Logger::makeDefaultLogFilename() const {
              << std::setfill('0') << std::setw(2) << localTime.tm_sec
              << ".txt";
     return filename.str();
+}
+
+bool Logger::connectDaemonLocked() {
+#if defined(_WIN32)
+    (void)daemonAddr_;
+    daemonSocketFd_.reset();
+    return false;
+#else
+    if (daemonSocketFd_.has_value()) {
+        return true;
+    }
+
+    const DaemonEndpoint endpoint = parseDaemonEndpoint(daemonAddr_);
+    int fd = -1;
+    if (endpoint.kind == DaemonEndpoint::Kind::kUnix) {
+        fd = connectUnix(endpoint.path);
+    } else if (endpoint.kind == DaemonEndpoint::Kind::kTcp) {
+        fd = connectTcp(endpoint.host, endpoint.port);
+    } else {
+        return false;
+    }
+
+    if (fd < 0) {
+        return false;
+    }
+
+    daemonSocketFd_ = fd;
+    return true;
+#endif
+}
+
+void Logger::disableDaemonLocked() {
+#if defined(_WIN32)
+    daemonSocketFd_.reset();
+#else
+    if (daemonSocketFd_.has_value()) {
+        close(*daemonSocketFd_);
+        daemonSocketFd_.reset();
+    }
+#endif
 }
 
 }  // namespace myproject
