@@ -8,11 +8,12 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_executable(main src/main.cpp src/calculator.cpp src/logger.cpp)
 add_executable(logger_demo src/logger_demo.cpp src/logger.cpp)
 add_executable(logdaemon src/logdaemon.cpp)
-
+add_executable(logger_client_demo src/logger_client_demo.cpp)
 
 # Include directories
 target_include_directories(main PRIVATE include)
 target_include_directories(logger_demo PRIVATE include)
+target_include_directories(logger_client_demo PRIVATE include)
 
 # Add tests
 enable_testing()
