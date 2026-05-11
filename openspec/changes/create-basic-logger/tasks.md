@@ -51,9 +51,9 @@
 
 ## 7. Logdaemon (Multi-Process Collection)
 
-- [ ] 7.1 Define a minimal message schema and framing for log entries (timestamp, severity, pid, thread, message).
-- [ ] 7.2 Choose an IPC transport (e.g., localhost TCP / Unix domain socket) and document the trade-offs.
-- [ ] 7.3 Add a `LOG_OUTPUT=daemon` (and/or `both+daemon`) mode plus `LOG_DAEMON_ADDR` configuration.
+- [x] 7.1 Define a minimal message schema and framing for log entries (newline-delimited line frames that already include timestamp, severity, pid, thread, message).
+- [x] 7.2 Choose an IPC transport (localhost TCP and/or Unix domain socket) and document the address formats.
+- [x] 7.3 Add a `LOG_OUTPUT=daemon` (and/or `both+daemon`) mode plus `LOG_DAEMON_ADDR` configuration.
 - [ ] 7.4 Implement a client sink with reconnect, bounded buffering, and explicit backpressure/drop policy.
-- [ ] 7.5 Implement a `logdaemon` process that serializes writes to file/console and prevents line interleaving across senders.
+- [x] 7.5 Implement a `logdaemon` process that serializes writes to file/console and prevents line interleaving across senders.
 - [ ] 7.6 Add rotation/retention policy and security defaults (local-only by default; document auth if remote is enabled).

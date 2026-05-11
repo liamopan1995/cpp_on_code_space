@@ -1,16 +1,15 @@
 # OpenSpec 工作流总结
 
 ## 目录结构
-- `openspec/changes/create-basic-calculator/`：当前 change 的工作目录
-- `openspec/changes/create-basic-calculator/proposal.md`：proposal 文档
-- `openspec/changes/create-basic-calculator/design.md`：design 文档
-- `openspec/changes/create-basic-calculator/specs/basic-calculator/spec.md`：spec 文档
-- `openspec/changes/create-basic-calculator/tasks.md`：tasks 任务清单
-- `src/calculator.cpp`：Calculator 实现
-- `include/myproject/calculator.h`：Calculator 头文件
-- `tests/unit/test_calculator.cpp`：单元测试文件
-- `tests/CMakeLists.txt`：测试构建配置
-- `CMakeLists.txt`：项目主构建配置
+- `openspec/changes/<change-name>/`：当前 change 的工作目录（例如 `create-basic-logger`）
+- `openspec/changes/<change-name>/proposal.md`：proposal 文档
+- `openspec/changes/<change-name>/design.md`：design 文档
+- `openspec/changes/<change-name>/tasks.md`：tasks 任务清单
+- `openspec/specs/<capability>/spec.md`：系统规格（单一事实来源）
+- `openspec/changes/archive/YYYY-MM-DD-<change-name>/`：已归档的 change（只读记录）
+- `src/`、`include/`：实现代码
+- `tests/`：单元测试 / 集成测试
+- `CMakeLists.txt`、`tests/CMakeLists.txt`：构建配置
 
 ## 1. 环境准备
 
@@ -32,15 +31,15 @@
 ### 2.1 新建变更
 命令：
 ```bash
-openspec new change "create-basic-calculator"
+openspec new change "<change-name>"
 ```
 
 原因：
-- 这个命令初始化一个新的 OpenSpec change，生成 `openspec/changes/create-basic-calculator/` 目录。
+- 这个命令初始化一个新的 OpenSpec change，生成 `openspec/changes/<change-name>/` 目录。
 - OpenSpec 会根据默认 schema 创建工作流骨架。
 
 效果：
-- 生成 `openspec/changes/create-basic-calculator/.openspec.yaml`
+- 生成 `openspec/changes/<change-name>/.openspec.yaml`
 - 初始化 artifact 结构：`proposal`、`design`、`specs`、`tasks`
 
 ## 3. 查看 Change 状态
@@ -48,7 +47,7 @@ openspec new change "create-basic-calculator"
 ### 3.1 检查当前 artifact 状态
 命令：
 ```bash
-openspec status --change "create-basic-calculator" --json
+openspec status --change "<change-name>" --json
 ```
 
 原因：
@@ -63,7 +62,7 @@ openspec status --change "create-basic-calculator" --json
 ### 4.1 获取 Proposal 指令
 命令：
 ```bash
-openspec instructions proposal --change "create-basic-calculator" --json
+openspec instructions proposal --change "<change-name>" --json
 ```
 
 原因：
@@ -133,7 +132,7 @@ This change adds a basic calculator functionality to the C++ project, allowing u
 ### 5.1 获取 Design 指令
 命令：
 ```bash
-openspec instructions design --change "create-basic-calculator" --json
+openspec instructions design --change "<change-name>" --json
 ```
 
 原因：
@@ -155,14 +154,14 @@ openspec instructions design --change "create-basic-calculator" --json
 ### 6.1 获取 Specs 指令
 命令：
 ```bash
-openspec instructions specs --change "create-basic-calculator" --json
+openspec instructions specs --change "<change-name>" --json
 ```
 
 原因：
 - 确认 spec 文件格式要求和规范。
 - 明确需求应该使用 `SHALL/MUST` 语义，并包含可测试场景。
 
-### 6.2 创建 `specs/basic-calculator/spec.md`
+### 6.2 创建/更新主规格 `openspec/specs/<capability>/spec.md`
 文件内容说明：
 - `ADDED Requirements`：新增功能需求
 - 每个 `Requirement` 有至少一个 `Scenario`
@@ -176,7 +175,7 @@ openspec instructions specs --change "create-basic-calculator" --json
 ### 7.1 获取 Tasks 指令
 命令：
 ```bash
-openspec instructions tasks --change "create-basic-calculator" --json
+openspec instructions tasks --change "<change-name>" --json
 ```
 
 原因：
@@ -198,7 +197,7 @@ openspec instructions tasks --change "create-basic-calculator" --json
 ### 8.1 获取 apply 指令
 命令：
 ```bash
-openspec instructions apply --change "create-basic-calculator" --json
+openspec instructions apply --change "<change-name>" --json
 ```
 
 原因：
@@ -276,10 +275,10 @@ cmake --build /workspaces/cpp_on_code_space/build
 
 ## 11. 结果文件清单
 
-- `openspec/changes/create-basic-calculator/proposal.md`
-- `openspec/changes/create-basic-calculator/design.md`
-- `openspec/changes/create-basic-calculator/specs/basic-calculator/spec.md`
-- `openspec/changes/create-basic-calculator/tasks.md`
+- `openspec/changes/<change-name>/proposal.md`
+- `openspec/changes/<change-name>/design.md`
+- `openspec/changes/<change-name>/tasks.md`
+- `openspec/specs/<capability>/spec.md`
 - `include/myproject/calculator.h`
 - `src/calculator.cpp`
 - `src/main.cpp`
@@ -292,7 +291,7 @@ cmake --build /workspaces/cpp_on_code_space/build
 ### 12.1 归档命令
 命令：
 ```bash
-openspec archive create-basic-calculator
+openspec archive <change-name>
 ```
 
 原因：
@@ -305,14 +304,14 @@ openspec archive create-basic-calculator
 - `--no-validate`：跳过验证（不推荐）
 
 ### 12.3 归档的作用和影响
-- 把 `openspec/changes/create-basic-calculator/` 移动到 `openspec/changes/archive/YYYY-MM-DD-create-basic-calculator/`
+- 把 `openspec/changes/<change-name>/` 移动到 `openspec/changes/archive/YYYY-MM-DD-<change-name>/`
 - 该 change 不再作为活动 change 跟踪
 - 保留变更历史和 `.openspec.yaml`
 - 不会直接修改代码逻辑，只是工作流状态整理
 
 ### 12.4 归档前检查
-- `openspec status --change "create-basic-calculator" --json`，确认 artifacts 已完成
-- `openspec/changes/create-basic-calculator/tasks.md` 中任务已全部打勾
+- `openspec status --change "<change-name>" --json`，确认 artifacts 已完成
+- `openspec/changes/<change-name>/tasks.md` 中任务已全部打勾
 - 如果有 delta specs，先决定是否同步到主 spec
 
 ## 13. 延伸：在每个步骤中你还可以做什么

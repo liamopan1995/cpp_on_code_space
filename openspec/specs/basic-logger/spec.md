@@ -23,6 +23,7 @@ The logger SHALL derive its default behavior from environment variables during i
 - `LOG_LEVEL` SHALL control the minimum emitted severity.
 - `LOG_OUTPUT` SHALL control destination mode.
 - `LOG_FILE` SHALL control the file path when file output is enabled.
+- `LOG_DAEMON_ADDR` SHALL control the daemon endpoint when daemon output is enabled.
 
 #### Scenario: Valid log level from environment
 - **WHEN** `LOG_LEVEL=debug`
@@ -38,6 +39,13 @@ The logger SHALL derive its default behavior from environment variables during i
 - **WHEN** `LOG_OUTPUT` is unset or invalid
 - **AND** the logger initializes
 - **THEN** the logger enables file output by default.
+
+#### Scenario: Output tokens may be combined
+- **WHEN** `LOG_OUTPUT=both+daemon`
+- **AND** an eligible entry is logged
+- **THEN** the entry is written to the console
+- **AND** the same entry is written to the configured log file
+- **AND** the same entry is sent to the configured daemon endpoint.
 
 ### Requirement: Logger shall support console and file destinations
 The logger SHALL support console-only, file-only, and combined console-plus-file output modes.
@@ -65,6 +73,25 @@ The logger SHALL support console-only, file-only, and combined console-plus-file
 - **THEN** subsequent eligible entries are appended to that file.
 - **WHEN** `disableFileLogging()` is called
 - **THEN** subsequent entries are no longer written to the file.
+
+### Requirement: Logger shall support daemon destination mode
+The logger SHALL support sending log entries to an external process collector (e.g., `logdaemon`) when configured.
+
+- `LOG_OUTPUT` SHALL support a `daemon` token, alone or combined with `console`, `file`, or `both` using `+` separators (e.g., `daemon`, `console+daemon`, `both+daemon`).
+- `LOG_DAEMON_ADDR` SHALL accept either `unix:<path>` (or an absolute path starting with `/`) for Unix domain sockets, or `host:port` for localhost TCP.
+- Each sent entry SHALL be framed as one line terminated by `\n`.
+
+#### Scenario: Daemon output is enabled
+- **WHEN** `LOG_OUTPUT=daemon`
+- **AND** `LOG_DAEMON_ADDR` points to a reachable daemon endpoint
+- **AND** an eligible entry is logged
+- **THEN** the entry is sent to the daemon as a single newline-terminated line.
+
+#### Scenario: Daemon connection failure falls back to local visibility
+- **WHEN** `LOG_OUTPUT=daemon`
+- **AND** the configured daemon endpoint cannot be reached
+- **THEN** daemon output is disabled
+- **AND** if no other destination is enabled, console output is enabled so emitted entries remain observable.
 
 ### Requirement: Logger shall emit structured textual context
 Each emitted entry SHALL be formatted as a single line containing timestamp, severity, process context, thread context, and message text.
@@ -127,13 +154,8 @@ The logger SHALL preserve each entry as one complete line when multiple threads 
 - **AND** the specification does not require that order to reflect cross-thread causal order.
 
 ## Potential Improvements
-- Add a `logdaemon` option: a small dedicated log collector process that accepts log entries from multiple processes and writes them to a single file (and/or console) with clear ordering guarantees.
-  - **Solution plan (logdaemon)**:
-    - Define an IPC transport and framing (e.g., local TCP/UDS with newline-delimited frames) and a minimal message schema that includes timestamp, severity, pid, thread, and message.
-    - Add a logger destination mode (e.g., `LOG_OUTPUT=daemon` / `LOG_OUTPUT=both+daemon`) plus configuration (`LOG_DAEMON_ADDR`) and a client sink that can reconnect.
-    - Keep daemon writes single-threaded (or internally serialized) so the on-disk log is line-atomic and not interleaved across senders.
-    - Add bounded buffering and backpressure rules (drop policy or rate limiting) and a client-side fallback (e.g., to console-only) when the daemon is unreachable.
-    - Add log file rotation and retention policy (size/time based) so long-running systems remain manageable.
-    - Keep it local-only by default (UDS / localhost) and document any authentication/authorization choices if remote collection is ever enabled.
+- Tighten daemon backpressure semantics (bounded buffering / explicit drop policy) and define a clear reconnect strategy for long-running clients.
+- Add rotation/retention policy (size/time based) for both local file output and `logdaemon`-managed file output.
+- Keep daemon communication local-only by default (UDS / localhost) and document any authentication/authorization choices if remote collection is ever enabled.
 - Add sub-second timestamps so near-simultaneous events from different threads or processes can be correlated more precisely.
 - Add a structured correlation field such as request ID, object ID, or session ID to make interaction traces easier to group during debugging.

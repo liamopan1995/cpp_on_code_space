@@ -25,7 +25,7 @@
 ## Impact
 - 影响文件：`include/myproject/logger.h`、`src/logger.cpp`、`src/main.cpp`
 - 影响测试：`tests/unit/test_logger.cpp`
-- 影响规格文档：`openspec/changes/create-basic-logger/specs/create-basic-logger/spec.md`、`openspec/changes/create-basic-logger/design.md`
+- 影响规格文档：`openspec/specs/basic-logger/spec.md`、`openspec/changes/create-basic-logger/design.md`
 - 需要修改构建配置：`CMakeLists.txt`、`tests/CMakeLists.txt`
 - 为后续日志写入文件、日志格式扩展、日志级别过滤、线程上下文输出以及异步写盘提供基础接口和实现
 - 增加 `logdaemon` 汇聚路径，避免多进程直接共享同一日志文件带来的并发写入与顺序不确定问题

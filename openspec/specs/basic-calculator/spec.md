@@ -1,7 +1,7 @@
 # basic-calculator Specification
 
 ## Purpose
-TBD - created by archiving change create-basic-calculator. Update Purpose after archive.
+Provide a small, dependency-free calculator API for demo code and unit tests, covering basic arithmetic operations and well-defined division-by-zero behavior.
 ## Requirements
 ### Requirement: Calculator shall perform addition
 The calculator SHALL provide an add function that takes two numbers and returns their sum.
@@ -45,5 +45,4 @@ The calculator SHALL provide a divide function that takes two numbers and return
 
 #### Scenario: Division by zero
 - **WHEN** divide(5.0, 0.0) is called
-- **THEN** it throws a division_by_zero exception
-
+- **THEN** it throws a `std::runtime_error`
