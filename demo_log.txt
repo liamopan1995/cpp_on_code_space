@@ -1,0 +1,15 @@
+[2026-05-11 23:33:18] [INFO] [pid=33224] [thread=1] [logger_demo.cpp:106] Starting Logger Demo Application
+[2026-05-11 23:33:18] [INFO] [pid=33224] [thread=1] [logger_demo.cpp:23] === Basic Logging Demo ===
+[2026-05-11 23:33:18] [DEBUG] [pid=33224] [thread=1] [logger_demo.cpp:26] This is a debug message
+[2026-05-11 23:33:18] [INFO] [pid=33224] [thread=1] [logger_demo.cpp:27] This is an info message
+[2026-05-11 23:33:18] [WARN] [pid=33224] [thread=1] [logger_demo.cpp:28] This is a warning message
+[2026-05-11 23:33:18] [ERROR] [pid=33224] [thread=1] [logger_demo.cpp:29] This is an error message
+[2026-05-11 23:33:18] [INFO] [pid=33224] [thread=1] [logger_demo.cpp:31] === End Basic Demo ===
+[2026-05-11 23:33:18] [INFO] [pid=33224] [thread=1] [logger_demo.cpp:35] === Log Level Control Demo ===
+[2026-05-11 23:33:18] [INFO] [pid=33224] [thread=1] [logger_demo.cpp:40] Current log level shows all messages above INFO
+[2026-05-11 23:33:18] [DEBUG] [pid=33224] [thread=1] [logger_demo.cpp:41] This debug message should appear
+[2026-05-11 23:33:18] [WARN] [pid=33224] [thread=1] [logger_demo.cpp:46] This warning message should appear
+[2026-05-11 23:33:18] [ERROR] [pid=33224] [thread=1] [logger_demo.cpp:47] This error message should appear
+[2026-05-11 23:33:18] [DEBUG] [pid=33224] [thread=1] [logger_demo.cpp:51] Debug messages are visible again
+[2026-05-11 23:33:18] [INFO] [pid=33224] [thread=1] [logger_demo.cpp:53] === End Log Level Demo ===
+[2026-05-11 23:33:18] [INFO] [pid=33224] [thread=1] [logger_demo.cpp:57] === File Logging Demo ===

@@ -5,7 +5,11 @@
 
 namespace {
 
-void setDemoEnv(const char* name, const char* value) {
+void setDemoEnvIfUnset(const char* name, const char* value) {
+    const char* existing = std::getenv(name);
+    if (existing != nullptr && existing[0] != '\0') {
+        return;
+    }
 #if defined(_WIN32)
     _putenv_s(name, value);
 #else
@@ -90,9 +94,11 @@ void demoThreadSafety() {
 }
 
 int main() {
-    setDemoEnv("LOG_OUTPUT", "both");
-    setDemoEnv("LOG_FILE", "demo_log.txt");
-    setDemoEnv("LOG_LEVEL", "debug");
+    // Provide demo-friendly defaults without overriding user-provided settings.
+    // This keeps `logger_demo` compatible with daemon mode (e.g., LOG_OUTPUT=daemon).
+    setDemoEnvIfUnset("LOG_OUTPUT", "both");
+    setDemoEnvIfUnset("LOG_FILE", "demo_log.txt");
+    setDemoEnvIfUnset("LOG_LEVEL", "debug");
 
     auto& logger = myproject::Logger::getInstance();
     logger.init();

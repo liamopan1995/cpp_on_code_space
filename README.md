@@ -201,6 +201,69 @@ CMake 构建
 
 ---
 
+# 快速验证：Logger → logdaemon
+
+下面用最少的命令验证“应用进程发出的日志条目会被转发到 `logdaemon`”。
+
+## 1) 构建
+
+```bash
+cmake -S . -B build
+cmake --build build -j
+```
+
+## 2) 终端 A：启动 daemon
+
+TCP 示例：
+
+```bash
+./build/logdaemon --listen 127.0.0.1:7777
+```
+
+Unix Domain Socket 示例：
+
+```bash
+./build/logdaemon --listen unix:/tmp/log.sock
+```
+
+（可选）让 daemon 也写文件：
+
+```bash
+./build/logdaemon --listen 127.0.0.1:7777 --file /tmp/daemon.log
+```
+
+## 3) 终端 B：启动应用并把 logger 指向 daemon
+
+仅发送到 daemon：
+
+```bash
+export LOG_OUTPUT=daemon
+export LOG_DAEMON_ADDR=127.0.0.1:7777
+export LOG_LEVEL=debug
+./build/main
+```
+
+同时输出到 console/file + daemon：
+
+```bash
+export LOG_OUTPUT=both+daemon
+export LOG_DAEMON_ADDR=127.0.0.1:7777
+export LOG_FILE=demo_log.txt
+./build/logger_demo
+```
+
+预期现象：
+- 终端 A 会看到应用输出的日志行（每条日志为一行，以 `\n` 结尾）。
+- 如果加了 `--file /tmp/daemon.log`，可以用 `tail -f /tmp/daemon.log` 观察落盘内容。
+
+注意：如果你在受限的 sandbox/容器环境里运行，可能会因为系统策略禁止创建/绑定 socket 而看到 `Operation not permitted`，这不是 logger 逻辑问题。
+
+## 4) 用测试证明（自动化）
+
+```bash
+ctest --test-dir build -R test_logger --output-on-failure
+```
+
 # 推荐原则总结
 
 ## OpenSpec
@@ -775,4 +838,3 @@ structured logging
 - 高性能日志系统
 
 等方向提供了良好的基础。
-

@@ -17,6 +17,7 @@ int main() {
 }
 #else
 #include <netdb.h>
+#include <cerrno>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/un.h>
@@ -96,6 +97,8 @@ int createListeningSocketTcp(const std::string& host, const std::string& port, s
     struct addrinfo* results = nullptr;
     const int gai = getaddrinfo(host.empty() ? nullptr : host.c_str(), port.c_str(), &hints, &results);
     if (gai != 0) {
+        std::cerr << "getaddrinfo failed for " << (host.empty() ? "<any>" : host) << ":" << port
+                  << ": " << gai_strerror(gai) << "\n";
         return -1;
     }
 
@@ -110,11 +113,15 @@ int createListeningSocketTcp(const std::string& host, const std::string& port, s
         setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
 
         if (bind(fd, rp->ai_addr, static_cast<socklen_t>(rp->ai_addrlen)) != 0) {
+            std::cerr << "bind failed for " << (host.empty() ? "<any>" : host) << ":" << port
+                      << ": " << std::strerror(errno) << "\n";
             close(fd);
             continue;
         }
 
         if (listen(fd, 64) != 0) {
+            std::cerr << "listen failed for " << (host.empty() ? "<any>" : host) << ":" << port
+                      << ": " << std::strerror(errno) << "\n";
             close(fd);
             continue;
         }
@@ -150,6 +157,7 @@ int createListeningSocketUnix(const std::string& path, std::string* boundAddr) {
 
     const int fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) {
+        std::cerr << "socket(AF_UNIX) failed: " << std::strerror(errno) << "\n";
         return -1;
     }
 
@@ -158,12 +166,16 @@ int createListeningSocketUnix(const std::string& path, std::string* boundAddr) {
     std::strncpy(addr.sun_path, path.c_str(), sizeof(addr.sun_path) - 1);
 
     unlink(path.c_str());
-    if (bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
+    const socklen_t addrLen = static_cast<socklen_t>(
+        offsetof(sockaddr_un, sun_path) + std::strlen(addr.sun_path) + 1);
+    if (bind(fd, reinterpret_cast<sockaddr*>(&addr), addrLen) != 0) {
+        std::cerr << "bind(AF_UNIX) failed for " << path << ": " << std::strerror(errno) << "\n";
         close(fd);
         return -1;
     }
 
     if (listen(fd, 64) != 0) {
+        std::cerr << "listen(AF_UNIX) failed for " << path << ": " << std::strerror(errno) << "\n";
         close(fd);
         return -1;
     }
