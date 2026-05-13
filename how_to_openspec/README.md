@@ -5,7 +5,8 @@
 - `openspec/changes/<change-name>/proposal.md`：proposal 文档
 - `openspec/changes/<change-name>/design.md`：design 文档
 - `openspec/changes/<change-name>/tasks.md`：tasks 任务清单
-- `openspec/specs/<capability>/spec.md`：系统规格（单一事实来源）
+- `openspec/changes/<change-name>/specs/<capability>/spec.md`：变更内规格（delta specs，用于本次 change）
+- `openspec/specs/<capability>/spec.md`：主规格（main specs，系统单一事实来源）
 - `openspec/changes/archive/YYYY-MM-DD-<change-name>/`：已归档的 change（只读记录）
 - `src/`、`include/`：实现代码
 - `tests/`：单元测试 / 集成测试
@@ -42,6 +43,16 @@ openspec new change "<change-name>"
 - 生成 `openspec/changes/<change-name>/.openspec.yaml`
 - 初始化 artifact 结构：`proposal`、`design`、`specs`、`tasks`
 
+`.openspec.yaml`（参考）：
+```yaml
+schema: spec-driven
+created: YYYY-MM-DD
+```
+
+书写建议：
+- `<change-name>` 用动词短语（例如 `add-xxx` / `fix-yyy`），避免含糊名称。
+- `<capability>` 用稳定、可复用的名词短语（避免带版本号或临时前缀）。
+
 ## 3. 查看 Change 状态
 
 ### 3.1 检查当前 artifact 状态
@@ -55,7 +66,7 @@ openspec status --change "<change-name>" --json
 - 确认哪些 artifact 已准备好、哪些还被阻塞。
 
 效果：
-- 了解到 `proposal` 先写，之后才能生成 `design` 和 `specs`。
+- 了解到 `proposal` 先写，之后依次完成 `specs` → `design` → `tasks`。
 
 ## 4. 生成 Proposal
 
@@ -73,63 +84,87 @@ openspec instructions proposal --change "<change-name>" --json
 文件内容说明：
 - `Why`：说明为什么需要这次改动
 - `What Changes`：列出代码和功能变化
-- `Capabilities`：定义新能力 `basic-calculator`
+- `Capabilities`：定义本次 change 涉及的能力（capability）
 - `Impact`：说明受影响代码和测试
 
 效果：
 - proposal 成为后续 `design`、`specs`、`tasks` 的基础。
 
-模板：
-```
-# Proposal: Create Basic Calculator
+模板（精简）：
+```md
+# Proposal: <change-name>
 
 ## Why
-描述为什么需要 basic-calculator 能力，解决什么问题或改进什么场景。
+一句话说明动机 + 业务/技术背景。
 
 ## What Changes
-- 添加 `include/myproject/calculator.h`
-- 添加 `src/calculator.cpp`
-- 修改 `src/main.cpp` 以演示 calculator 功能
-- 添加或更新单元测试 `tests/unit/test_calculator.cpp`
+- 新增/修改的关键行为（面向用户/调用方）
+- 主要代码改动点（面向实现）
 
 ## Capabilities
-- 引入 `basic-calculator` 能力
-- 提供基本算术运算：加、减、乘、除
+- <capability-1>
+- <capability-2>
 
 ## Impact
-- 影响文件：`include/myproject/calculator.h`、`src/calculator.cpp`、`src/main.cpp`
-- 影响测试：`tests/unit/test_calculator.cpp`
-- 需要更新 `CMakeLists.txt` 以包含 calculator 实现和测试目标
+- 影响的模块/接口/兼容性/迁移
+- 测试与发布注意事项
 ```
-或者：
-## Why
 
-This change adds a basic calculator functionality to the C++ project, allowing users to perform simple arithmetic operations like addition, subtraction, multiplication, and division. This enhances the project with a practical example of modular code organization and basic math operations.
+书写建议：
+- `Why` 先讲问题与价值，再讲方案。
+- `What Changes` 写“会发生什么变化”，避免写成实现细节堆砌。
+- `Impact` 明确破坏性变更、数据迁移、回滚策略（如有）。
 
-## What Changes
+> 说明：本文档只描述工作流。为避免示例与实际项目偏离，这里仅提供“可复用模板片段”；后续会用我们马上要做的新项目补充一个完整示例（当前先占位，不展开）。
 
-- Add a new Calculator class in the src/ directory
-- Implement basic arithmetic operations: add, subtract, multiply, divide
-- Update main.cpp to demonstrate the calculator usage
-- Add unit tests for the calculator functions
+## 5. 生成 Specs（先于 Design）
 
-## Capabilities
+### 5.1 获取 Specs 指令
+命令：
+```bash
+openspec instructions specs --change "<change-name>" --json
+```
 
-### New Capabilities
-- `basic-calculator`: Provides a simple calculator with arithmetic operations
+原因：
+- 确认 spec 文件格式要求和规范。
+- 明确需求应使用可验证的规范语言（例如 MUST/SHALL），并包含可测试场景。
 
-### Modified Capabilities
-<!-- No existing capabilities are being modified -->
+### 5.2 在 change 内创建/更新规格（delta specs）
+目标路径：
+- `openspec/changes/<change-name>/specs/<capability>/spec.md`
 
-## Impact
+效果：
+- 规格先在 change 内沉淀，便于与 proposal / design / tasks 一起迭代。
 
-- New source files: src/calculator.cpp, include/myproject/calculator.h
-- Modified: src/main.cpp to include calculator demo
-- New tests in tests/unit/
+模板（精简）：
+```md
+# Spec: <capability>
 
-## 5. 生成 Design
+## Summary
+一句话描述这个 capability 是什么。
 
-### 5.1 获取 Design 指令
+## Requirements
+### R1: <short-name>
+The system MUST ...
+
+#### Scenario: <happy-path>
+Given ...
+When ...
+Then ...
+
+#### Scenario: <edge-case>
+Given ...
+When ...
+Then ...
+```
+
+书写建议：
+- Requirement 用 MUST/SHALL + 可测的动词（返回/拒绝/记录/限制），避免“提升/优化/支持”等不可验证表述。
+- Scenario 尽量让测试能直接映射：输入 → 行为 → 可观察输出（返回值/副作用/日志/错误码）。
+
+## 6. 生成 Design
+
+### 6.1 获取 Design 指令
 命令：
 ```bash
 openspec instructions design --change "<change-name>" --json
@@ -139,7 +174,7 @@ openspec instructions design --change "<change-name>" --json
 - 查看 design 文档需要的结构和内容。
 - 确保实现方案清晰且与 proposal 保持一致。
 
-### 5.2 创建 `design.md`
+### 6.2 创建 `design.md`
 文件内容说明：
 - `Context`：当前项目结构和目标
 - `Goals / Non-Goals`：实现范围与非范围
@@ -149,26 +184,35 @@ openspec instructions design --change "<change-name>" --json
 效果：
 - 提前固化实现思路，减少编码阶段的歧义。
 
-## 6. 生成 Specs
+模板（精简）：
+```md
+# Design: <change-name>
 
-### 6.1 获取 Specs 指令
-命令：
-```bash
-openspec instructions specs --change "<change-name>" --json
+## Context
+现状/约束/相关系统与依赖。
+
+## Goals
+- ...
+
+## Non-Goals
+- ...
+
+## Approach
+总体方案与模块划分。
+
+## Decisions
+- Decision: ...
+  - Rationale: ...
+  - Alternatives: ...
+
+## Risks & Trade-offs
+- Risk: ...
+  - Mitigation: ...
 ```
 
-原因：
-- 确认 spec 文件格式要求和规范。
-- 明确需求应该使用 `SHALL/MUST` 语义，并包含可测试场景。
-
-### 6.2 创建/更新主规格 `openspec/specs/<capability>/spec.md`
-文件内容说明：
-- `ADDED Requirements`：新增功能需求
-- 每个 `Requirement` 有至少一个 `Scenario`
-- 使用 `#### Scenario:` 精确格式
-
-效果：
-- 为实现和测试提供明确的行为契约。
+书写建议：
+- 把“为什么这么做”写清楚（rationale），比写“怎么做”更重要。
+- 对外接口（API/CLI/配置）与错误处理策略要明确，便于 spec 与测试对齐。
 
 ## 7. 生成 Tasks
 
@@ -184,13 +228,26 @@ openspec instructions tasks --change "<change-name>" --json
 
 ### 7.2 创建 `tasks.md`
 文件内容说明：
-- 1. Create Calculator Module
-- 2. Implement Arithmetic Operations
-- 3. Integrate with Main Application
-- 4. Add Unit Tests
+- 用 `- [ ]` 列出可独立交付的任务条目（实现、测试、文档、构建等）
+- 每个任务尽量可在一次提交内完成
 
 效果：
 - 形成明确的实现步骤，便于逐个完成并记录进度。
+
+模板（精简）：
+```md
+# Tasks: <change-name>
+
+- [ ] Define public API / interfaces
+- [ ] Implement core behavior
+- [ ] Add tests for scenarios
+- [ ] Wire build / CI if needed
+- [ ] Update docs / examples
+```
+
+书写建议：
+- 任务写成“动词开头 + 可验收结果”，例如 “Add tests for <scenario>”。
+- 把“验证任务”也写进去（如 `ctest`、静态检查、手动验证步骤）。
 
 ## 8. 实现与应用 Change
 
@@ -216,12 +273,6 @@ openspec instructions apply --change "<change-name>" --json
 - 避免直接编码时偏离 spec。
 
 ### 8.3 按任务逐项实现
-已完成工作：
-- `include/myproject/calculator.h`
-- `src/calculator.cpp`
-- 修改 `src/main.cpp` 引入 calculator 示例
-- `tests/unit/test_calculator.cpp` 编写单元测试
-
 任务状态更新：
 - 每完成一项即修改 `tasks.md` 中对应 `- [ ]` 为 `- [x]`
 
@@ -233,12 +284,12 @@ openspec instructions apply --change "<change-name>" --json
 
 ### 9.1 修正 CMake 配置
 修改内容：
-- `CMakeLists.txt` 添加 `src/calculator.cpp` 到 `main` 可执行目标
-- `tests/CMakeLists.txt` 将 `src/calculator.cpp` 也加入 `test_calculator` 可执行目标
+- 把本次 change 新增/修改的实现文件加入对应的 target（例如主程序、库、测试可执行文件）
+- 如果测试需要复用实现代码，建议抽取为 library target，然后让主程序与测试都链接该库
 
 原因：
-- `test_calculator` 需要 calculator 的定义，否则会出现链接错误。
-- 头文件声明和实现文件都必须被链接到目标。
+- 仅包含头文件声明不会参与链接；参与链接的是实现文件/库 target。
+- 测试编译通过但链接失败，通常意味着“测试 target 没有链接到实现”。
 
 ### 9.2 编译命令
 ```bash
@@ -253,38 +304,34 @@ cmake --build /workspaces/cpp_on_code_space/build
 
 ### 9.4 运行测试
 ```bash
-./build/tests/test_calculator
+ctest --test-dir build --output-on-failure
 ```
 
 效果：
-- `main` 输出 calculator 演示结果
-- 单元测试全部通过
+- 构建成功
+- 测试通过
 
 ## 10. 关键问题与原因说明
 
 ### 10.1 链接错误原因
 问题：测试可执行文件能够编译，但链接时出现 `undefined reference`。
 原因：
-- `tests/CMakeLists.txt` 初始只编译了测试源码 `unit/test_calculator.cpp`
-- 但 `Calculator` 的实现位于 `src/calculator.cpp`
-- 结果测试目标没有链接到实现文件，导致链接失败
+- 测试 target 只编译了测试源码，但没有链接到实现代码（实现文件未加入 target，或未链接到对应库）。
 
 解决方案：
-- 在 `tests/CMakeLists.txt` 中添加 `../src/calculator.cpp`
-- 或者将 `calculator.cpp` 提取为库 target，主程序和测试都链接该库
+- 方案 A：把实现源文件加入测试 target 的 sources
+- 方案 B（推荐）：抽取为 library target，并在主程序与测试中统一链接该库
 
 ## 11. 结果文件清单
 
 - `openspec/changes/<change-name>/proposal.md`
 - `openspec/changes/<change-name>/design.md`
 - `openspec/changes/<change-name>/tasks.md`
-- `openspec/specs/<capability>/spec.md`
-- `include/myproject/calculator.h`
-- `src/calculator.cpp`
-- `src/main.cpp`
-- `tests/unit/test_calculator.cpp`
-- `tests/CMakeLists.txt`
-- `CMakeLists.txt`
+- `openspec/changes/<change-name>/specs/<capability>/spec.md`
+- `openspec/specs/<capability>/spec.md`（归档时由 delta specs 更新/合并而来）
+- `src/`、`include/` 下与本次 change 对应的实现代码
+- `tests/` 下与本次 change 对应的测试
+- 构建系统文件（如 `CMakeLists.txt`、`tests/CMakeLists.txt`）的必要更新
 
 ## 12. 归档 Change
 
@@ -307,7 +354,7 @@ openspec archive <change-name>
 - 把 `openspec/changes/<change-name>/` 移动到 `openspec/changes/archive/YYYY-MM-DD-<change-name>/`
 - 该 change 不再作为活动 change 跟踪
 - 保留变更历史和 `.openspec.yaml`
-- 不会直接修改代码逻辑，只是工作流状态整理
+- 默认会尝试把 change 内的 delta specs 同步/合并到 `openspec/specs/`（可用 `--skip-specs` 跳过）
 
 ### 12.4 归档前检查
 - `openspec status --change "<change-name>" --json`，确认 artifacts 已完成
@@ -350,6 +397,10 @@ openspec archive <change-name>
 - 复盘流程：每完成一个 change 后，总结哪些步骤效率高、哪些步骤出错多。
 - 规范文档：把常见问题和解决办法写入 `how_to_openspec/README.md`，积累团队经验。
 - 扩展 schema：如果当前 change 需要更复杂流程，可以考虑定制 OpenSpec schema 或 artifact 结构。
+
+## 14. 示例（占位）
+
+> TODO：后续用“我们马上要做的新项目”补充一个完整示例（从 `openspec new change` 到 `openspec archive`），并确保示例与仓库结构、构建系统、测试实际一致。
 
 ---
 
